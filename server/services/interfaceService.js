@@ -53,8 +53,9 @@ async function phySupportsAP(phy) {
     if (start === -1) return false;
     const section = stdout.slice(start + 'Supported interface modes:'.length);
     for (const line of section.split('\n')) {
+      if (line.trim() === '') continue; // skip blank lines between header and entries
       if (!line.match(/^\s+\*/)) break; // end of mode list (next section started)
-      if (/\*\s+AP\s*$/.test(line)) return true; // "* AP" alone, no colon after
+      if (/\*\s+AP\s*$/.test(line)) return true; // "* AP" alone, not "* AP/VLAN" or "* AP:"
     }
     return false;
   } catch {
