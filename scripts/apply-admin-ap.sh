@@ -132,18 +132,21 @@ sysctl -w net.ipv4.ip_forward=1 > /dev/null
 touch "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
 chmod 644 "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
 
-# ── Bring interface down so hostapd can take control ──────────────────────────
-ip link set "${IFACE}" down
+# ── Prepare interface for hostapd ─────────────────────────────────────────────
+# Bring UP first (some USB drivers need to be up to allow mode switch to AP)
+ip link set "${IFACE}" up
 ip addr flush dev "${IFACE}"
-sleep 0.3
+# Pre-set mode to AP; hostapd will do this too but some drivers prefer it early
+iw dev "${IFACE}" set type __ap 2>/dev/null || true
+sleep 1
 
-# ── Start hostapd directly (hostapd brings the interface up) ──────────────────
+# ── Start hostapd directly ─────────────────────────────────────────────────────
 hostapd -B -P "${HOSTAPD_ADMIN_PID}" -f "${HOSTAPD_ADMIN_LOG}" "${HOSTAPD_ADMIN_CONF}" \
   || { echo "ERROR: hostapd failed, check ${HOSTAPD_ADMIN_LOG}" >&2; exit 1; }
 
 sleep 1
 
-# ── Assign IP after hostapd has brought the interface up ─────────────────────
+# ── Assign IP ─────────────────────────────────────────────────────────────────
 ip addr flush dev "${IFACE}"
 ip addr add "${GATEWAY}/24" dev "${IFACE}"
 
