@@ -110,6 +110,7 @@
   <button class="nav-tab" data-tab="tab-clients">Clients</button>
   <button class="nav-tab" data-tab="tab-logs">Logs</button>
   <button class="nav-tab" data-tab="tab-admin">Admin AP</button>
+  <button class="nav-tab" data-tab="tab-scanner">Scanner</button>
 </nav>
 
 <div class="container">
@@ -236,6 +237,55 @@
   </div>
 
   <!-- ── Admin AP ──────────────────────────────────────────────────────────── -->
+  <div id="tab-scanner" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>Wi-Fi Scanner</h2>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <span id="scanner-status-badge"></span>
+          <button class="btn btn-sm btn-primary" id="btn-scan-now">Scan Now</button>
+          <button class="btn btn-sm" style="background:#e9ecef;color:#495057" id="btn-clear-history">Clear History</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end">
+        <div class="form-group" style="margin:0;min-width:160px">
+          <label for="scan-interface" style="font-size:.8rem">Scan Interface</label>
+          <select id="scan-interface" style="margin-top:.25rem"></select>
+        </div>
+        <div class="form-group" style="margin:0;min-width:130px">
+          <label for="scan-interval" style="font-size:.8rem">Interval (seconds)</label>
+          <input type="number" id="scan-interval" min="10" max="3600" style="margin-top:.25rem">
+        </div>
+        <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer;padding-bottom:.1rem">
+          <input type="checkbox" id="scan-enabled"> Auto-scan enabled
+        </label>
+        <button class="btn btn-primary" id="btn-save-scanner" style="align-self:flex-end">Save</button>
+      </div>
+      <div id="scanner-meta" style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem"></div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="overflow-x:auto">
+        <table id="scan-table" style="width:100%;border-collapse:collapse;font-size:.85rem">
+          <thead>
+            <tr style="background:#f8f9fa;text-align:left">
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">SSID</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">BSSID</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">Signal</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">Ch</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">Security</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">First Seen</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">Last Seen</th>
+              <th style="padding:.6rem 1rem;border-bottom:1px solid var(--border)">#</th>
+            </tr>
+          </thead>
+          <tbody id="scan-tbody">
+            <tr><td colspan="8" style="padding:2rem;text-align:center;color:var(--muted)">No scan data yet — click Scan Now or enable auto-scan.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="tab-admin" class="tab-panel">
     <div class="card">
       <div class="card-header">
@@ -321,6 +371,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
     if (tab.dataset.tab === 'tab-adapters') loadAdapters();
     if (tab.dataset.tab === 'tab-clients')  loadClients();
     if (tab.dataset.tab === 'tab-admin')    loadAdminAp();
+    if (tab.dataset.tab === 'tab-scanner')  loadScanner();
   });
 });
 
@@ -690,6 +741,103 @@ $('btn-admin-stop').addEventListener('click', async () => {
     showStatus('Admin AP stopped.', 'success');
     await loadAdminAp();
   } catch (e) { showStatus('Failed: ' + e.message, 'error', 0); }
+  finally { setLoading(btn, false); }
+});
+
+// ── Scanner ───────────────────────────────────────────────────────────────────
+
+function signalBar(dbm) {
+  if (dbm === null) return '<span style="color:var(--muted)">—</span>';
+  const pct = Math.max(0, Math.min(100, 2 * (dbm + 100)));
+  const color = pct > 60 ? 'var(--success)' : pct > 30 ? 'var(--warning)' : 'var(--danger)';
+  return `<span style="color:${color};font-weight:600">${dbm} dBm</span>`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadScanner() {
+  try {
+    const [settings, history] = await Promise.all([
+      apiFetch('/api/scanner/settings'),
+      apiFetch('/api/scanner/results'),
+    ]);
+
+    $('scan-interval').value = settings.intervalSeconds || 60;
+    $('scan-enabled').checked = !!settings.enabled;
+    $('scanner-status-badge').innerHTML = settings.enabled
+      ? '<span class="badge badge-active">AUTO</span>'
+      : '<span class="badge badge-inactive">MANUAL</span>';
+    $('scanner-meta').textContent = history.lastScan
+      ? `Last scan: ${fmtDate(history.lastScan)} · ${history.totalSeen} unique network${history.totalSeen !== 1 ? 's' : ''} recorded`
+      : 'No scans yet.';
+
+    // Populate interface dropdown with all interfaces (not filtered by AP support)
+    const scanSel = $('scan-interface');
+    const curIface = scanSel.value || settings.interface;
+    scanSel.innerHTML = availableInterfaces
+      .map(i => `<option value="${esc(i.name)}">${esc(i.name)} (${esc(i.phy)})${i.supportsAP ? '' : ' · scan-only'}</option>`)
+      .join('') || `<option value="${esc(settings.interface)}">${esc(settings.interface)}</option>`;
+    scanSel.value = curIface;
+
+    renderScanTable(history.networks || []);
+  } catch (e) { showStatus('Error loading scanner: ' + e.message, 'error'); }
+}
+
+function renderScanTable(networks) {
+  const tbody = $('scan-tbody');
+  if (!networks.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:2rem;text-align:center;color:var(--muted)">No scan data yet — click Scan Now or enable auto-scan.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = networks.map(n => `
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:.55rem 1rem;font-weight:500">${n.ssid ? esc(n.ssid) : '<span style="color:var(--muted);font-style:italic">(hidden)</span>'}</td>
+      <td style="padding:.55rem 1rem;font-family:monospace;font-size:.8rem">${esc(n.bssid)}</td>
+      <td style="padding:.55rem 1rem">${signalBar(n.signal)}</td>
+      <td style="padding:.55rem 1rem">${n.channel ?? '—'}</td>
+      <td style="padding:.55rem 1rem"><span class="badge" style="background:${n.security === 'Open' ? '#fff3cd' : '#d1e7dd'};color:${n.security === 'Open' ? '#664d03' : '#0a3622'}">${esc(n.security)}</span></td>
+      <td style="padding:.55rem 1rem;font-size:.8rem;color:var(--muted)">${fmtDate(n.firstSeen)}</td>
+      <td style="padding:.55rem 1rem;font-size:.8rem;color:var(--muted)">${fmtDate(n.lastSeen)}</td>
+      <td style="padding:.55rem 1rem;color:var(--muted)">${n.seenCount}</td>
+    </tr>`).join('');
+}
+
+$('btn-scan-now').addEventListener('click', async () => {
+  const btn = $('btn-scan-now');
+  setLoading(btn, true);
+  try {
+    const res = await apiFetch('/api/scanner/scan', { method: 'POST' });
+    showStatus(`Scan complete — ${res.found} network${res.found !== 1 ? 's' : ''} found.`, 'success');
+    await loadScanner();
+  } catch (e) { showStatus('Scan failed: ' + e.message, 'error', 0); }
+  finally { setLoading(btn, false); }
+});
+
+$('btn-clear-history').addEventListener('click', async () => {
+  if (!confirm('Clear all scan history?')) return;
+  try {
+    await apiFetch('/api/scanner/history', { method: 'DELETE' });
+    showStatus('History cleared.', 'success');
+    await loadScanner();
+  } catch (e) { showStatus('Error: ' + e.message, 'error', 0); }
+});
+
+$('btn-save-scanner').addEventListener('click', async () => {
+  const btn = $('btn-save-scanner');
+  setLoading(btn, true);
+  try {
+    await apiFetch('/api/scanner/settings', { method: 'PATCH', body: JSON.stringify({
+      interface:       $('scan-interface').value,
+      intervalSeconds: parseInt($('scan-interval').value, 10),
+      enabled:         $('scan-enabled').checked,
+    }) });
+    showStatus('Scanner settings saved.', 'success');
+    await loadScanner();
+  } catch (e) { showStatus('Error: ' + e.message, 'error', 0); }
   finally { setLoading(btn, false); }
 });
 

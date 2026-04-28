@@ -8,7 +8,9 @@ const clientRoutes = require('./routes/clients');
 const logRoutes = require('./routes/logs');
 const adminApRoutes = require('./routes/adminAp');
 const interfaceRoutes = require('./routes/interfaces');
+const scannerRoutes = require('./routes/scanner');
 const networkManager = require('./services/networkManager');
+const scannerService = require('./services/scannerService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,12 +37,15 @@ app.get(CAPTIVE_PROBE_PATHS, (req, res) => {
 
 // On startup clear stale active state — processes don't survive reboot
 networkManager.resetOnStartup();
+// Resume auto-scan if it was enabled before restart
+scannerService.startAutoScan();
 
 app.use('/api/profiles', profileRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/admin-ap', adminApRoutes);
 app.use('/api/interfaces', interfaceRoutes);
+app.use('/api/scanner', scannerRoutes);
 
 // Captive portal page
 app.get('/portal', (req, res) => {
