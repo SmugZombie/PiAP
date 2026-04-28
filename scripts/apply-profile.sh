@@ -111,45 +111,54 @@ PYEOF
 fi
 
 # ── nftables isolation rules ──────────────────────────────────────────────────
+# Build the ruleset line-by-line to avoid f-string brace-escaping pitfalls.
 python3 - "${IFACE}" "${INTERNET_ACCESS}" "${LAN_ACCESS}" "${NFT_RULES}" << 'PYEOF'
 import sys
 
-iface, internet_s, lan_s, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-internet = internet_s == 'true'
-lan      = lan_s      == 'true'
+iface      = sys.argv[1]
+internet   = sys.argv[2] == 'true'
+lan        = sys.argv[3] == 'true'
+out        = sys.argv[4]
 
-forward_body = ""
-nat_chain    = ""
+L = []
+L.append('table inet piap_guest {')
 
+# input chain — allow only DHCP, DNS, captive portal, and app port from guest iface
+L.append('  chain input {')
+L.append('    type filter hook input priority 0; policy accept;')
+L.append('    iifname "' + iface + '" udp dport 67 accept')
+L.append('    iifname "' + iface + '" udp dport 53 accept')
+L.append('    iifname "' + iface + '" tcp dport 53 accept')
+L.append('    iifname "' + iface + '" tcp dport 80 accept')
+L.append('    iifname "' + iface + '" tcp dport 3000 accept')
+L.append('    iifname "' + iface + '" drop')
+L.append('  }')
+L.append('')
+
+# forward chain — drop all by default; selectively allow if flags set
+L.append('  chain forward {')
+L.append('    type filter hook forward priority 0; policy drop;')
 if internet:
-    forward_body += f'    iifname "{iface}" oifname "eth0" ct state new accept\n'
-    forward_body += '    ct state established,related accept\n'
-    nat_chain = f'\n  chain postrouting {{\n    type nat hook postrouting priority 100;\n    iifname "{iface}" oifname "eth0" masquerade\n  }}\n'
+    L.append('    iifname "' + iface + '" oifname "eth0" ct state new accept')
+    L.append('    ct state established,related accept')
 elif lan:
-    forward_body += f'    iifname "{iface}" oifname "eth0" accept\n'
-    forward_body += '    ct state established,related accept\n'
-    nat_chain = f'\n  chain postrouting {{\n    type nat hook postrouting priority 100;\n    iifname "{iface}" oifname "eth0" masquerade\n  }}\n'
+    L.append('    iifname "' + iface + '" oifname "eth0" accept')
+    L.append('    ct state established,related accept')
+L.append('    iifname "' + iface + '" drop')
+L.append('  }')
 
-rules = f"""table inet piap_guest {{
-  chain input {{
-    type filter hook input priority 0; policy accept;
-    iifname "{iface}" udp dport 67 accept
-    iifname "{iface}" udp dport 53 accept
-    iifname "{iface}" tcp dport 53 accept
-    iifname "{iface}" tcp dport 80 accept
-    iifname "{iface}" tcp dport 3000 accept
-    iifname "{iface}" drop
-  }}
+# NAT postrouting — only needed when forwarding is allowed
+if internet or lan:
+    L.append('')
+    L.append('  chain postrouting {')
+    L.append('    type nat hook postrouting priority 100;')
+    L.append('    iifname "' + iface + '" oifname "eth0" masquerade')
+    L.append('  }')
 
-  chain forward {{
-    type filter hook forward priority 0; policy drop;
-{forward_body}    iifname "{iface}" drop
-  }}{nat_chain}}}
-"""
+L.append('}')
 
 with open(out, 'w') as f:
-    f.write(rules)
-print(f"nft rules written to {out}")
+    f.write('\n'.join(L) + '\n')
 PYEOF
 
 nft flush table inet piap_guest 2>/dev/null || true
