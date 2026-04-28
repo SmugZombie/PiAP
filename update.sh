@@ -34,6 +34,9 @@ if [[ "${STAMPED_SUDOERS}" != "$(cat /etc/sudoers.d/piap 2>/dev/null)" ]]; then
   visudo -c -f /etc/sudoers.d/piap || { echo "ERROR: sudoers invalid, reverting"; rm /etc/sudoers.d/piap; exit 1; }
 fi
 
+# ── Ensure piap user can read journalctl logs ─────────────────────────────────
+usermod -a -G systemd-journal piap 2>/dev/null || true
+
 # ── Make scripts executable ───────────────────────────────────────────────────
 chmod 750 "${INSTALL_DIR}/scripts"/*.sh
 chown root:piap "${INSTALL_DIR}/scripts"/*.sh

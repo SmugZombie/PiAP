@@ -97,6 +97,9 @@ def teardown_phy(phy, config_dir, dnsmasq_d):
 def start_hostapd(hostapd_conf, hostapd_pid, phy):
     """Start hostapd, logging to file. Raise with log tail on failure."""
     log_file = f'/var/log/piap-hostapd-{phy}.log'
+    # Pre-create world-readable so the piap service user can read it later
+    open(log_file, 'a').close()
+    os.chmod(log_file, 0o644)
     result = subprocess.run(
         ['hostapd', '-B', '-P', hostapd_pid, '-f', log_file, hostapd_conf],
         capture_output=True, text=True
@@ -107,6 +110,12 @@ def start_hostapd(hostapd_conf, hostapd_pid, phy):
             tail = open(log_file).read()[-3000:]
         except Exception:
             pass
+        # Surface Broadcom multi-BSS limitation as a clear message
+        if 'Failed to create interface' in tail or 'Device or resource busy' in tail:
+            raise RuntimeError(
+                'This Wi-Fi adapter does not support multiple SSIDs (multi-BSS). '
+                'Use a separate physical adapter for each network.'
+            )
         raise RuntimeError(
             f'hostapd failed (exit {result.returncode}):\n'
             f'{result.stderr.strip()}\n'
@@ -318,6 +327,8 @@ def main():
         dm_conf  = f'{config_dir}/dnsmasq-{iface}.conf'
         pid_file = f'/run/piap-dnsmasq-{iface}.pid'
         log_file = f'/var/log/piap-dnsmasq-{iface}.log'
+        open(log_file, 'a').close()
+        os.chmod(log_file, 0o644)
         run('dnsmasq',
             f'--conf-file={dm_conf}',
             f'--pid-file={pid_file}',

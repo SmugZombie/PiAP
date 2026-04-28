@@ -51,11 +51,14 @@ pkill -f "hostapd.*hostapd-admin.conf" 2>/dev/null || true
 pkill -f "dnsmasq.*dnsmasq-admin.conf" 2>/dev/null || true
 sleep 0.5
 
-# ── Release interface from wpa_supplicant ─────────────────────────────────────
+# ── Release interface from wpa_supplicant and NetworkManager ──────────────────
 systemctl stop wpa_supplicant 2>/dev/null || true
 systemctl stop "wpa_supplicant@${IFACE}" 2>/dev/null || true
 wpa_cli -i "${IFACE}" terminate 2>/dev/null || true
 pkill -f "wpa_supplicant.*${IFACE}" 2>/dev/null || true
+# Tell NetworkManager to stop managing this interface (if NM is running)
+nmcli dev set "${IFACE}" managed no 2>/dev/null || true
+rfkill unblock wifi 2>/dev/null || true
 sleep 1
 
 # ── hostapd config ────────────────────────────────────────────────────────────
@@ -124,6 +127,10 @@ nft flush table inet piap_admin 2>/dev/null || true
 nft -f "${NFT_ADMIN}"
 
 sysctl -w net.ipv4.ip_forward=1 > /dev/null
+
+# ── Pre-create log files world-readable so piap service can read them ─────────
+touch "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
+chmod 644 "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
 
 # ── Bring interface down so hostapd can take control ──────────────────────────
 ip link set "${IFACE}" down
