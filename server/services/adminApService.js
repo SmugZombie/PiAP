@@ -6,6 +6,8 @@
 // network on wlan0.
 
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 const path = require('path');
 const { execFile } = require('child_process');
 const util = require('util');
@@ -84,19 +86,28 @@ async function applySettings(data) {
   return getSettings();
 }
 
+function writeTempJson(data) {
+  const tmpPath = path.join(os.tmpdir(), `piap-admin-${crypto.randomUUID()}.json`);
+  fs.writeFileSync(tmpPath, JSON.stringify(data), { mode: 0o600 });
+  return tmpPath;
+}
+
 async function start() {
   const settings = readSettings();
-  const env = { ...process.env, PIAP_ADMIN_AP: JSON.stringify(settings) };
+  const tmpFile = writeTempJson(settings);
 
-  const { stdout, stderr } = await execFileAsync('sudo', [ADMIN_APPLY_SCRIPT], {
-    env,
-    timeout: 30000,
-  });
+  try {
+    const { stdout, stderr } = await execFileAsync('sudo', [ADMIN_APPLY_SCRIPT, tmpFile], {
+      timeout: 30000,
+    });
 
-  settings.enabled = true;
-  writeSettings(settings);
+    settings.enabled = true;
+    writeSettings(settings);
 
-  return { stdout, stderr };
+    return { stdout, stderr };
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
 }
 
 async function stop() {

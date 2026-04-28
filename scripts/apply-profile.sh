@@ -17,7 +17,13 @@ CAPTIVE_HTML="/var/www/piap-captive/index.html"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-[[ -n "${PIAP_PROFILE:-}" ]] || die "PIAP_PROFILE env var not set"
+PROFILE_FILE="${1:-}"
+[[ -n "${PROFILE_FILE}" && -f "${PROFILE_FILE}" ]] || die "Usage: $0 <profile-json-file>"
+
+# Read JSON from the temp file, then delete it immediately so the password
+# doesn't linger on disk. Root can read it because root can read any file.
+PIAP_PROFILE="$(cat "${PROFILE_FILE}")"
+rm -f "${PROFILE_FILE}"
 
 # Parse JSON with python3 — arguments pass field names, stdout is the value
 _str()  { python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('$1',''))"           <<< "${PIAP_PROFILE}"; }

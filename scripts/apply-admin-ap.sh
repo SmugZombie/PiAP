@@ -12,7 +12,11 @@ SYSTEMD_DIR="/etc/systemd/system"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-[[ -n "${PIAP_ADMIN_AP:-}" ]] || die "PIAP_ADMIN_AP env var not set"
+PROFILE_FILE="${1:-}"
+[[ -n "${PROFILE_FILE}" && -f "${PROFILE_FILE}" ]] || die "Usage: $0 <admin-ap-json-file>"
+
+PIAP_ADMIN_AP="$(cat "${PROFILE_FILE}")"
+rm -f "${PROFILE_FILE}"
 
 _str()  { python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('$1',''))" <<< "${PIAP_ADMIN_AP}"; }
 _int()  { python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(int(d.get('$1',1)))" <<< "${PIAP_ADMIN_AP}"; }
