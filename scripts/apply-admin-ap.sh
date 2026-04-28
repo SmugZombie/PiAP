@@ -72,33 +72,37 @@ ip addr add "${GATEWAY}/24" dev "${IFACE}"
 ln -sf "${DNSMASQ_ADMIN_CONF}" "${DNSMASQ_CONFD}/piap-admin.conf"
 
 # ── nftables: allow admin AP full access to Pi, block cross-AP ───────────────
-# Admin AP clients get access to port 3000 (web UI) and the internet upstream.
-# They cannot reach guest AP clients (wlan0).
-nft flush table inet piap_admin 2>/dev/null || true
+NFT_ADMIN="${CONFIG_DIR}/piap-admin.nft"
 
-nft - << NFTEOF
-table inet piap_admin {
-  chain input {
-    type filter hook input priority -5; policy accept;
-    iifname "${IFACE}" udp dport 67 accept
-    iifname "${IFACE}" udp dport 53 accept
-    iifname "${IFACE}" tcp dport 53 accept
-    iifname "${IFACE}" tcp dport 3000 accept
-    iifname "${IFACE}" tcp dport 80 accept
-    iifname "${IFACE}" tcp dport 22 accept
-  }
-  chain forward_admin {
-    type filter hook forward priority -5; policy accept;
-    # Block admin AP clients from reaching guest AP clients
-    iifname "${IFACE}" oifname "wlan0" drop
-    iifname "wlan0" oifname "${IFACE}" drop
-  }
-  chain postrouting_admin {
-    type nat hook postrouting priority 90;
-    iifname "${IFACE}" oifname "eth0" masquerade
-  }
-}
-NFTEOF
+python3 - "${IFACE}" "${NFT_ADMIN}" << 'PYEOF'
+import sys
+iface, out = sys.argv[1], sys.argv[2]
+L = []
+L.append('table inet piap_admin {')
+L.append('  chain input {')
+L.append('    type filter hook input priority filter; policy accept;')
+L.append('    iifname "' + iface + '" udp dport 67 accept')
+L.append('    iifname "' + iface + '" udp dport 53 accept')
+L.append('    iifname "' + iface + '" tcp dport 53 accept')
+L.append('    iifname "' + iface + '" tcp dport 3000 accept')
+L.append('    iifname "' + iface + '" tcp dport 80 accept')
+L.append('    iifname "' + iface + '" tcp dport 22 accept')
+L.append('  }')
+L.append('  chain forward_admin {')
+L.append('    type filter hook forward priority filter; policy accept;')
+L.append('    iifname "' + iface + '" oifname "wlan0" drop')
+L.append('    iifname "wlan0" oifname "' + iface + '" drop')
+L.append('  }')
+L.append('  chain postrouting_admin {')
+L.append('    type nat hook postrouting priority srcnat;')
+L.append('    iifname "' + iface + '" oifname "eth0" masquerade')
+L.append('  }')
+L.append('}')
+open(out, 'w').write('\n'.join(L) + '\n')
+PYEOF
+
+nft flush table inet piap_admin 2>/dev/null || true
+nft -f "${NFT_ADMIN}"
 
 sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
