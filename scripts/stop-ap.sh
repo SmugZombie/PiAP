@@ -9,8 +9,12 @@ DNSMASQ_LINK="/etc/dnsmasq.d/piap-guest.conf"
 
 echo "Stopping guest AP on ${IFACE}..."
 
+kill "$(cat /run/piap-hostapd.pid 2>/dev/null)" 2>/dev/null || true
+kill "$(cat /run/piap-dnsmasq.pid 2>/dev/null)" 2>/dev/null || true
+rm -f /run/piap-hostapd.pid /run/piap-dnsmasq.pid
+
 systemctl stop hostapd 2>/dev/null || true
-systemctl stop dnsmasq 2>/dev/null || true
+systemctl stop dnsmasq  2>/dev/null || true
 
 # Remove our dnsmasq symlink
 rm -f "${DNSMASQ_LINK}"

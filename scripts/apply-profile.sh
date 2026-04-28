@@ -171,11 +171,33 @@ else
   sysctl -w net.ipv4.ip_forward=0 > /dev/null
 fi
 
-# ── Start services ────────────────────────────────────────────────────────────
-systemctl stop hostapd 2>/dev/null || true
-systemctl stop dnsmasq 2>/dev/null || true
+# ── Release wlan0 from wpa_supplicant so hostapd can take it ─────────────────
+# wpa_supplicant holds the interface in managed mode; hostapd needs unmanaged.
+systemctl stop wpa_supplicant 2>/dev/null || true
+wpa_cli -i "${IFACE}" terminate 2>/dev/null || true
+rfkill unblock wifi 2>/dev/null || true
 sleep 1
-systemctl start hostapd
-systemctl start dnsmasq
+
+# Set interface to unmanaged mode
+ip link set "${IFACE}" down
+iw dev "${IFACE}" set type __ap 2>/dev/null || true
+ip link set "${IFACE}" up
+ip addr flush dev "${IFACE}"
+ip addr add "${GATEWAY}/${PREFIX}" dev "${IFACE}"
+
+# ── Stop any previous instance ────────────────────────────────────────────────
+kill "$(cat /run/piap-hostapd.pid 2>/dev/null)" 2>/dev/null || true
+kill "$(cat /run/piap-dnsmasq.pid 2>/dev/null)" 2>/dev/null || true
+systemctl stop hostapd 2>/dev/null || true
+systemctl stop dnsmasq  2>/dev/null || true
+sleep 1
+
+# ── Start hostapd directly with our config (bypasses DAEMON_CONF issues) ─────
+hostapd -B -P /run/piap-hostapd.pid "${HOSTAPD_CONF}"
+
+# ── Start dnsmasq directly with our config ────────────────────────────────────
+dnsmasq --conf-file="${DNSMASQ_CONF}" \
+        --pid-file=/run/piap-dnsmasq.pid \
+        --log-facility=/var/log/piap-dnsmasq.log
 
 echo "OK: guest AP '${SSID}' started on ${IFACE}"

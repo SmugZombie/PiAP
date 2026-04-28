@@ -54,22 +54,24 @@ async function stopNetwork() {
   return { stdout, stderr };
 }
 
-async function isHostapdRunning() {
+function isPidAlive(pidFile) {
+  const fs = require('fs');
   try {
-    const { stdout } = await execFileAsync('systemctl', ['is-active', 'hostapd']);
-    return stdout.trim() === 'active';
+    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    if (!pid) return false;
+    process.kill(pid, 0); // signal 0 = existence check, throws if dead
+    return true;
   } catch {
     return false;
   }
 }
 
+async function isHostapdRunning() {
+  return isPidAlive('/run/piap-hostapd.pid');
+}
+
 async function isDnsmasqRunning() {
-  try {
-    const { stdout } = await execFileAsync('systemctl', ['is-active', 'dnsmasq']);
-    return stdout.trim() === 'active';
-  } catch {
-    return false;
-  }
+  return isPidAlive('/run/piap-dnsmasq.pid');
 }
 
 async function getSystemStatus() {
