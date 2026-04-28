@@ -132,17 +132,17 @@ async function stopNetwork(profileId) {
 
   state[foundPhy].profiles = state[foundPhy].profiles.filter(p => p.profileId !== profileId);
 
+  let result;
   if (state[foundPhy].profiles.length === 0) {
-    // Stop the entire phy (pass empty profiles list)
-    await applyPhy(foundPhy, state[foundPhy].primaryIface, []);
+    result = await applyPhy(foundPhy, state[foundPhy].primaryIface, []);
     delete state[foundPhy];
   } else {
-    // Rebuild without the removed profile
     const entries = buildEntries(state[foundPhy]);
-    await applyPhy(foundPhy, state[foundPhy].primaryIface, entries);
+    result = await applyPhy(foundPhy, state[foundPhy].primaryIface, entries);
   }
 
   writeState(state);
+  return result;
 }
 
 // Reset all active state on startup — processes don't survive reboot.
