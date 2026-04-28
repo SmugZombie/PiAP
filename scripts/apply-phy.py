@@ -106,22 +106,18 @@ def main():
     # All BSSes on same radio share the primary profile's channel
     channel = int(profiles[0].get('channel', 6))
 
-    # ── Set up interfaces ────────────────────────────────────────────────────
-    for i, profile in enumerate(profiles):
-        iface = profile['logicalIface']
-        if iface == primary_iface:
-            silent('ip', 'link', 'set', iface, 'down')
-            silent('iw', 'dev', iface, 'set', 'type', '__ap')
-            run('ip', 'link', 'set', iface, 'up')
-        else:
-            run('iw', 'phy', phy, 'interface', 'add', iface, 'type', '__ap')
-            run('ip', 'link', 'set', iface, 'up')
+    # ── Set up primary interface ──────────────────────────────────────────────
+    # Virtual interfaces (bss=) are created by hostapd itself — do NOT
+    # pre-create them with `iw`. Broadcom (brcmfmac) rejects pre-creation.
+    silent('ip', 'link', 'set', primary_iface, 'down')
+    silent('iw', 'dev', primary_iface, 'set', 'type', '__ap')
+    run('ip', 'link', 'set', primary_iface, 'up')
 
-        gw     = profile['gateway']
-        subnet = profile['subnet']
-        prefix = subnet.split('/')[-1]
-        silent('ip', 'addr', 'flush', 'dev', iface)
-        run('ip', 'addr', 'add', f'{gw}/{prefix}', 'dev', iface)
+    gw0     = profiles[0]['gateway']
+    subnet0 = profiles[0]['subnet']
+    prefix0 = subnet0.split('/')[-1]
+    silent('ip', 'addr', 'flush', 'dev', primary_iface)
+    run('ip', 'addr', 'add', f'{gw0}/{prefix0}', 'dev', primary_iface)
 
     # ── hostapd multi-BSS config ─────────────────────────────────────────────
     lines = []
@@ -246,8 +242,32 @@ def main():
     silent('sysctl', '-w', f'net.ipv4.ip_forward={val}')
 
     # ── Start hostapd ────────────────────────────────────────────────────────
+    # hostapd creates any bss= virtual interfaces itself when it starts.
     run('hostapd', '-B', '-P', hostapd_pid, hostapd_conf)
-    time.sleep(1)
+
+    # Wait for hostapd to bring up virtual interfaces before assigning IPs.
+    if len(profiles) > 1:
+        time.sleep(2)
+        for profile in profiles[1:]:
+            iface  = profile['logicalIface']
+            gw     = profile['gateway']
+            subnet = profile['subnet']
+            prefix = subnet.split('/')[-1]
+            # Retry a few times — Broadcom may take a moment to expose the interface
+            for attempt in range(6):
+                result = subprocess.run(['ip', 'link', 'show', iface],
+                                        capture_output=True)
+                if result.returncode == 0:
+                    silent('ip', 'addr', 'flush', 'dev', iface)
+                    run('ip', 'addr', 'add', f'{gw}/{prefix}', 'dev', iface)
+                    run('ip', 'link', 'set', iface, 'up')
+                    break
+                time.sleep(1)
+            else:
+                print(f'WARNING: interface {iface} did not appear after hostapd start',
+                      file=sys.stderr)
+    else:
+        time.sleep(1)
 
     # ── Start one dnsmasq per logical interface ───────────────────────────────
     for profile in profiles:

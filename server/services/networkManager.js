@@ -106,9 +106,16 @@ async function startNetwork(profile) {
   // Build full entry list for this phy
   const entries = buildEntries(state[phy]);
 
-  const result = await applyPhy(phy, state[phy].primaryIface, entries);
-  writeState(state);
-  return result;
+  try {
+    const result = await applyPhy(phy, state[phy].primaryIface, entries);
+    writeState(state);
+    return result;
+  } catch (err) {
+    // Roll back so a retry gets the same (correct) slot assignment
+    state[phy].profiles = state[phy].profiles.filter(p => p.profileId !== profile.id);
+    if (state[phy].profiles.length === 0) delete state[phy];
+    throw err;
+  }
 }
 
 async function stopNetwork(profileId) {
