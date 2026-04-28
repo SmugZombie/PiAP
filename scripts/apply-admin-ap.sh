@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# apply-admin-ap.sh — starts the always-on admin management AP on wlan1.
-# Invoked via: sudo apply-admin-ap.sh (with PIAP_ADMIN_AP env var set)
+# apply-admin-ap.sh — starts the always-on admin management AP.
+# Invoked via: sudo apply-admin-ap.sh <admin-ap-json-file>
 # Must run as root.
 set -euo pipefail
 
@@ -8,7 +8,6 @@ CONFIG_DIR="/etc/piap"
 HOSTAPD_ADMIN_CONF="${CONFIG_DIR}/hostapd-admin.conf"
 DNSMASQ_ADMIN_CONF="${CONFIG_DIR}/dnsmasq-admin.conf"
 DNSMASQ_CONFD="/etc/dnsmasq.d"
-SYSTEMD_DIR="/etc/systemd/system"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -31,9 +30,35 @@ CHANNEL="$(_int channel)"
 
 [[ -n "$IFACE" && -n "$SSID" && -n "$PASSWORD" && -n "$GATEWAY" ]] || die "Missing required admin AP fields"
 
+HOSTAPD_ADMIN_PID="/run/piap-hostapd-admin.pid"
+DNSMASQ_ADMIN_PID="/run/piap-dnsmasq-${IFACE}.pid"
+HOSTAPD_ADMIN_LOG="/var/log/piap-hostapd-admin.log"
+DNSMASQ_ADMIN_LOG="/var/log/piap-dnsmasq-${IFACE}.log"
+
 mkdir -p "${CONFIG_DIR}"
 
-# ── hostapd-admin config ──────────────────────────────────────────────────────
+# ── Stop any existing admin AP processes ──────────────────────────────────────
+if [[ -f "${HOSTAPD_ADMIN_PID}" ]]; then
+  kill "$(cat "${HOSTAPD_ADMIN_PID}")" 2>/dev/null || true
+  sleep 0.5
+  rm -f "${HOSTAPD_ADMIN_PID}"
+fi
+if [[ -f "${DNSMASQ_ADMIN_PID}" ]]; then
+  kill "$(cat "${DNSMASQ_ADMIN_PID}")" 2>/dev/null || true
+  rm -f "${DNSMASQ_ADMIN_PID}"
+fi
+pkill -f "hostapd.*hostapd-admin.conf" 2>/dev/null || true
+pkill -f "dnsmasq.*dnsmasq-admin.conf" 2>/dev/null || true
+sleep 0.5
+
+# ── Release interface from wpa_supplicant ─────────────────────────────────────
+systemctl stop wpa_supplicant 2>/dev/null || true
+systemctl stop "wpa_supplicant@${IFACE}" 2>/dev/null || true
+wpa_cli -i "${IFACE}" terminate 2>/dev/null || true
+pkill -f "wpa_supplicant.*${IFACE}" 2>/dev/null || true
+sleep 1
+
+# ── hostapd config ────────────────────────────────────────────────────────────
 cat > "${HOSTAPD_ADMIN_CONF}" << HEOF
 interface=${IFACE}
 driver=nl80211
@@ -51,12 +76,7 @@ wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 HEOF
 
-# ── IP assignment for wlan1 ───────────────────────────────────────────────────
-ip link set "${IFACE}" up
-ip addr flush dev "${IFACE}"
-ip addr add "${GATEWAY}/24" dev "${IFACE}"
-
-# ── dnsmasq-admin config ──────────────────────────────────────────────────────
+# ── dnsmasq config ────────────────────────────────────────────────────────────
 {
   printf "interface=%s\n"             "${IFACE}"
   printf "bind-interfaces\n"
@@ -64,14 +84,13 @@ ip addr add "${GATEWAY}/24" dev "${IFACE}"
   printf "dhcp-option=3,%s\n"        "${GATEWAY}"
   printf "dhcp-option=6,%s\n"        "${GATEWAY}"
   printf "no-resolv\n"
-  # Admin AP forwards DNS to upstream (admins need real DNS)
   printf "server=8.8.8.8\n"
   printf "server=8.8.4.4\n"
 } > "${DNSMASQ_ADMIN_CONF}"
 
 ln -sf "${DNSMASQ_ADMIN_CONF}" "${DNSMASQ_CONFD}/piap-admin.conf"
 
-# ── nftables: allow admin AP full access to Pi, block cross-AP ───────────────
+# ── nftables ──────────────────────────────────────────────────────────────────
 NFT_ADMIN="${CONFIG_DIR}/piap-admin.nft"
 
 python3 - "${IFACE}" "${NFT_ADMIN}" << 'PYEOF'
@@ -106,30 +125,26 @@ nft -f "${NFT_ADMIN}"
 
 sysctl -w net.ipv4.ip_forward=1 > /dev/null
 
-# ── hostapd-admin systemd service ────────────────────────────────────────────
-cat > "${SYSTEMD_DIR}/hostapd-admin.service" << SEOF
-[Unit]
-Description=PiAP Admin Wi-Fi AP (wlan1)
-After=network.target
-Wants=network.target
+# ── Bring interface down so hostapd can take control ──────────────────────────
+ip link set "${IFACE}" down
+ip addr flush dev "${IFACE}"
+sleep 0.3
 
-[Service]
-Type=forking
-PIDFile=/run/hostapd-admin.pid
-ExecStart=/usr/sbin/hostapd -B -P /run/hostapd-admin.pid ${HOSTAPD_ADMIN_CONF}
-ExecReload=/bin/kill -HUP \$MAINPID
-Restart=on-failure
+# ── Start hostapd directly (hostapd brings the interface up) ──────────────────
+hostapd -B -P "${HOSTAPD_ADMIN_PID}" -f "${HOSTAPD_ADMIN_LOG}" "${HOSTAPD_ADMIN_CONF}" \
+  || { echo "ERROR: hostapd failed, check ${HOSTAPD_ADMIN_LOG}" >&2; exit 1; }
 
-[Install]
-WantedBy=multi-user.target
-SEOF
+sleep 1
 
-systemctl daemon-reload
-systemctl stop hostapd-admin 2>/dev/null || true
+# ── Assign IP after hostapd has brought the interface up ─────────────────────
+ip addr flush dev "${IFACE}"
+ip addr add "${GATEWAY}/24" dev "${IFACE}"
 
-# Restart dnsmasq to pick up new admin config
-systemctl stop dnsmasq 2>/dev/null || true
-systemctl start dnsmasq
-systemctl start hostapd-admin
+# ── Start dnsmasq directly (not via systemd) ──────────────────────────────────
+dnsmasq \
+  --conf-file="${DNSMASQ_ADMIN_CONF}" \
+  --pid-file="${DNSMASQ_ADMIN_PID}" \
+  --log-facility="${DNSMASQ_ADMIN_LOG}" \
+  || { echo "ERROR: dnsmasq failed for admin AP" >&2; exit 1; }
 
 echo "OK: admin AP '${SSID}' started on ${IFACE}"

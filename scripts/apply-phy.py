@@ -16,8 +16,16 @@ import ipaddress
 
 
 def run(*args, check=True):
-    return subprocess.run(list(args), check=check,
-                          capture_output=True, text=True)
+    """Run a command; on failure raise RuntimeError that includes stderr."""
+    result = subprocess.run(list(args), capture_output=True, text=True)
+    if check and result.returncode != 0:
+        cmd = ' '.join(str(a) for a in args)
+        raise RuntimeError(
+            f'Command failed (exit {result.returncode}): {cmd}\n'
+            f'stdout: {result.stdout.strip()}\n'
+            f'stderr: {result.stderr.strip()}'
+        )
+    return result
 
 
 def silent(*args):
@@ -53,23 +61,67 @@ def get_ifaces_on_phy(phy):
     return ifaces
 
 
+def kill_wpa_supplicant(iface):
+    """Stop wpa_supplicant for a specific interface (all known launch styles)."""
+    silent('systemctl', 'stop', 'wpa_supplicant')
+    silent('systemctl', 'stop', f'wpa_supplicant@{iface}')
+    silent('wpa_cli', '-i', iface, 'terminate')
+    silent('pkill', '-f', f'wpa_supplicant.*{iface}')
+    silent('pkill', '-f', f'wpa_supplicant.*-i.*{iface}')
+    time.sleep(1)
+
+
 def teardown_phy(phy, config_dir, dnsmasq_d):
     """Stop hostapd, all dnsmasq instances, remove virtual ifaces, flush nft."""
-    hostapd_pid = f'/run/piap-hostapd-{phy}.pid'
+    hostapd_pid  = f'/run/piap-hostapd-{phy}.pid'
+    hostapd_conf = f'{config_dir}/hostapd-{phy}.conf'
+
     stop_pid(hostapd_pid)
     silent('pkill', '-f', f'hostapd.*hostapd-{phy}.conf')
     time.sleep(0.5)
 
     for iface in get_ifaces_on_phy(phy):
         stop_pid(f'/run/piap-dnsmasq-{iface}.pid')
+        silent('pkill', '-f', f'dnsmasq.*dnsmasq-{iface}.conf')
         silent('nft', 'flush', 'table', 'inet', f'piap_{iface}')
         silent('nft', 'delete', 'table', 'inet', f'piap_{iface}')
         link = f'{dnsmasq_d}/piap-{iface}.conf'
         if os.path.lexists(link):
             os.remove(link)
+        # Remove virtual interfaces we created (primary stays)
         if iface.startswith('piap'):
             silent('ip', 'link', 'set', iface, 'down')
             silent('iw', 'dev', iface, 'del')
+
+
+def start_hostapd(hostapd_conf, hostapd_pid, phy):
+    """Start hostapd, logging to file. Raise with log tail on failure."""
+    log_file = f'/var/log/piap-hostapd-{phy}.log'
+    result = subprocess.run(
+        ['hostapd', '-B', '-P', hostapd_pid, '-f', log_file, hostapd_conf],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        tail = ''
+        try:
+            tail = open(log_file).read()[-3000:]
+        except Exception:
+            pass
+        raise RuntimeError(
+            f'hostapd failed (exit {result.returncode}):\n'
+            f'{result.stderr.strip()}\n'
+            f'--- hostapd log ---\n{tail}'
+        )
+
+
+def wait_for_iface(iface, timeout=8):
+    """Block until 'ip link show <iface>' succeeds or timeout elapses."""
+    for _ in range(timeout):
+        r = subprocess.run(['ip', 'link', 'show', iface], capture_output=True)
+        if r.returncode == 0:
+            return True
+        time.sleep(1)
+    return False
 
 
 def main():
@@ -98,28 +150,19 @@ def main():
         print(f'OK: {phy} stopped, no active profiles')
         return
 
-    # Release wlan from wpa_supplicant
-    silent('systemctl', 'stop', 'wpa_supplicant')
-    silent('rfkill', 'unblock', 'wifi')
-    time.sleep(0.5)
-
     # All BSSes on same radio share the primary profile's channel
     channel = int(profiles[0].get('channel', 6))
 
-    # ── Set up primary interface ──────────────────────────────────────────────
-    # Virtual interfaces (bss=) are created by hostapd itself — do NOT
-    # pre-create them with `iw`. Broadcom (brcmfmac) rejects pre-creation.
+    # ── Release the interface from wpa_supplicant ─────────────────────────────
+    kill_wpa_supplicant(primary_iface)
+    silent('rfkill', 'unblock', 'wifi')
+
+    # Bring primary interface down so hostapd can take full control
     silent('ip', 'link', 'set', primary_iface, 'down')
-    silent('iw', 'dev', primary_iface, 'set', 'type', '__ap')
-    run('ip', 'link', 'set', primary_iface, 'up')
-
-    gw0     = profiles[0]['gateway']
-    subnet0 = profiles[0]['subnet']
-    prefix0 = subnet0.split('/')[-1]
     silent('ip', 'addr', 'flush', 'dev', primary_iface)
-    run('ip', 'addr', 'add', f'{gw0}/{prefix0}', 'dev', primary_iface)
+    time.sleep(0.5)
 
-    # ── hostapd multi-BSS config ─────────────────────────────────────────────
+    # ── hostapd multi-BSS config ──────────────────────────────────────────────
     lines = []
     for i, profile in enumerate(profiles):
         iface = profile['logicalIface']
@@ -144,6 +187,7 @@ def main():
                 'rsn_pairwise=CCMP',
             ]
         else:
+            # hostapd creates the bss= virtual interface itself on start
             lines += [
                 '',
                 f'bss={iface}',
@@ -160,8 +204,35 @@ def main():
     with open(hostapd_conf, 'w') as f:
         f.write('\n'.join(lines) + '\n')
 
+    # ── Start hostapd (brings up the interface and any bss= virtuals) ─────────
+    start_hostapd(hostapd_conf, hostapd_pid, phy)
+
+    # Wait for primary interface to be available, then assign IP
+    if not wait_for_iface(primary_iface):
+        raise RuntimeError(f'{primary_iface} did not come up after hostapd start')
+
+    gw0     = profiles[0]['gateway']
+    subnet0 = profiles[0]['subnet']
+    prefix0 = subnet0.split('/')[-1]
+    silent('ip', 'addr', 'flush', 'dev', primary_iface)
+    run('ip', 'addr', 'add', f'{gw0}/{prefix0}', 'dev', primary_iface)
+
+    # Assign IPs to virtual BSS interfaces (created by hostapd)
+    for profile in profiles[1:]:
+        iface  = profile['logicalIface']
+        gw     = profile['gateway']
+        subnet = profile['subnet']
+        prefix = subnet.split('/')[-1]
+        if wait_for_iface(iface, timeout=8):
+            silent('ip', 'addr', 'flush', 'dev', iface)
+            run('ip', 'addr', 'add', f'{gw}/{prefix}', 'dev', iface)
+            run('ip', 'link', 'set', iface, 'up')
+        else:
+            print(f'WARNING: {iface} did not appear — BSS may not be fully supported',
+                  file=sys.stderr)
+
     # ── Per-interface dnsmasq configs and nftables rules ─────────────────────
-    nft_lines = []
+    nft_lines    = []
     needs_forward = False
 
     for profile in profiles:
@@ -179,7 +250,7 @@ def main():
         if internet or lan_access:
             needs_forward = True
 
-        # dnsmasq
+        # dnsmasq config
         dm_lines = [
             f'interface={iface}',
             'bind-interfaces',
@@ -204,11 +275,11 @@ def main():
             os.remove(link)
         os.symlink(dm_conf, link)
 
-        # nft — separate table per interface avoids rule conflicts
+        # nft — separate table per interface
         table = f'piap_{iface}'
         nft_lines.append(f'table inet {table} {{')
         nft_lines.append('  chain input {')
-        nft_lines.append('    type filter hook input priority 0; policy accept;')
+        nft_lines.append('    type filter hook input priority filter; policy accept;')
         nft_lines.append(f'    iifname "{iface}" udp dport 67 accept')
         nft_lines.append(f'    iifname "{iface}" udp dport 53 accept')
         nft_lines.append(f'    iifname "{iface}" tcp dport 53 accept')
@@ -217,7 +288,7 @@ def main():
         nft_lines.append(f'    iifname "{iface}" drop')
         nft_lines.append('  }')
         nft_lines.append('  chain forward {')
-        nft_lines.append('    type filter hook forward priority 0; policy drop;')
+        nft_lines.append('    type filter hook forward priority filter; policy drop;')
         if internet:
             nft_lines.append(f'    iifname "{iface}" oifname "eth0" ct state new accept')
             nft_lines.append('    ct state established,related accept')
@@ -228,7 +299,7 @@ def main():
         nft_lines.append('  }')
         if internet or lan_access:
             nft_lines.append('  chain postrouting {')
-            nft_lines.append('    type nat hook postrouting priority 100;')
+            nft_lines.append('    type nat hook postrouting priority srcnat;')
             nft_lines.append(f'    iifname "{iface}" oifname "eth0" masquerade')
             nft_lines.append('  }')
         nft_lines.append('}')
@@ -240,34 +311,6 @@ def main():
 
     val = '1' if needs_forward else '0'
     silent('sysctl', '-w', f'net.ipv4.ip_forward={val}')
-
-    # ── Start hostapd ────────────────────────────────────────────────────────
-    # hostapd creates any bss= virtual interfaces itself when it starts.
-    run('hostapd', '-B', '-P', hostapd_pid, hostapd_conf)
-
-    # Wait for hostapd to bring up virtual interfaces before assigning IPs.
-    if len(profiles) > 1:
-        time.sleep(2)
-        for profile in profiles[1:]:
-            iface  = profile['logicalIface']
-            gw     = profile['gateway']
-            subnet = profile['subnet']
-            prefix = subnet.split('/')[-1]
-            # Retry a few times — Broadcom may take a moment to expose the interface
-            for attempt in range(6):
-                result = subprocess.run(['ip', 'link', 'show', iface],
-                                        capture_output=True)
-                if result.returncode == 0:
-                    silent('ip', 'addr', 'flush', 'dev', iface)
-                    run('ip', 'addr', 'add', f'{gw}/{prefix}', 'dev', iface)
-                    run('ip', 'link', 'set', iface, 'up')
-                    break
-                time.sleep(1)
-            else:
-                print(f'WARNING: interface {iface} did not appear after hostapd start',
-                      file=sys.stderr)
-    else:
-        time.sleep(1)
 
     # ── Start one dnsmasq per logical interface ───────────────────────────────
     for profile in profiles:
