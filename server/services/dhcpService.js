@@ -37,4 +37,21 @@ function parseLeases() {
     .filter(l => !l.expired);
 }
 
-module.exports = { parseLeases };
+// Returns the profileId whose subnet contains the given IP, or null.
+function matchLeaseToProfile(ip, profiles) {
+  try {
+    const ipParts = ip.split('.').map(Number);
+    for (const profile of profiles) {
+      const [network, prefix] = profile.subnet.split('/');
+      const netParts = network.split('.').map(Number);
+      const bits = parseInt(prefix, 10);
+      const mask = ~((1 << (32 - bits)) - 1) >>> 0;
+      const ipInt  = (ipParts[0] << 24 | ipParts[1] << 16 | ipParts[2] << 8 | ipParts[3]) >>> 0;
+      const netInt = (netParts[0] << 24 | netParts[1] << 16 | netParts[2] << 8 | netParts[3]) >>> 0;
+      if ((ipInt & mask) === (netInt & mask)) return profile.id;
+    }
+  } catch {}
+  return null;
+}
+
+module.exports = { parseLeases, matchLeaseToProfile };

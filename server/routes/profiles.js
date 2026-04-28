@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const profileService = require('../services/profileService');
-const networkService = require('../services/networkService');
+const networkManager = require('../services/networkManager');
 
 router.get('/', (req, res) => {
   try {
@@ -58,14 +58,7 @@ router.post('/:id/start', async (req, res) => {
     if (!profile) return res.status(404).json({ error: 'Not found' });
     if (profile.active) return res.status(400).json({ error: 'Already active' });
 
-    const active = profileService.getActiveProfile();
-    if (active) {
-      // Stop the currently running network before starting a new one
-      await networkService.stopNetwork();
-      profileService.setActive(active.id, false);
-    }
-
-    const { stdout, stderr } = await networkService.startNetwork(profile);
+    const { stdout, stderr } = await networkManager.startNetwork(profile);
     const updated = profileService.setActive(profile.id, true);
 
     res.json({ profile: updated, stdout, stderr });
@@ -80,7 +73,7 @@ router.post('/:id/stop', async (req, res) => {
     if (!profile) return res.status(404).json({ error: 'Not found' });
     if (!profile.active) return res.status(400).json({ error: 'Not active' });
 
-    const { stdout, stderr } = await networkService.stopNetwork();
+    const { stdout, stderr } = await networkManager.stopNetwork(profile.id);
     const updated = profileService.setActive(profile.id, false);
 
     res.json({ profile: updated, stdout, stderr });

@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""apply-phy.py — configure a physical Wi-Fi radio with one or more SSIDs.
+
+Called by apply-phy.sh (via sudo). Reads config from the temp file at
+sys.argv[1], deletes it immediately, then:
+  - If profiles list is non-empty: sets up multi-BSS AP + dnsmasq + nftables
+  - If profiles list is empty: tears everything down for that phy
+"""
+import sys
+import json
+import os
+import signal
+import subprocess
+import time
+import ipaddress
+
+
+def run(*args, check=True):
+    return subprocess.run(list(args), check=check,
+                          capture_output=True, text=True)
+
+
+def silent(*args):
+    subprocess.run(list(args), capture_output=True)
+
+
+def stop_pid(pid_file):
+    if not os.path.exists(pid_file):
+        return
+    try:
+        pid = int(open(pid_file).read().strip())
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(0.5)
+    except (ValueError, ProcessLookupError, PermissionError):
+        pass
+    try:
+        os.unlink(pid_file)
+    except FileNotFoundError:
+        pass
+
+
+def get_ifaces_on_phy(phy):
+    """Return all interface names that belong to this physical radio."""
+    result = subprocess.run(['iw', 'dev'], capture_output=True, text=True)
+    ifaces = []
+    cur_phy = None
+    for line in result.stdout.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('phy#'):
+            cur_phy = 'phy' + stripped[4:].split()[0]
+        elif cur_phy == phy and stripped.startswith('Interface '):
+            ifaces.append(stripped.split()[1])
+    return ifaces
+
+
+def teardown_phy(phy, config_dir, dnsmasq_d):
+    """Stop hostapd, all dnsmasq instances, remove virtual ifaces, flush nft."""
+    hostapd_pid = f'/run/piap-hostapd-{phy}.pid'
+    stop_pid(hostapd_pid)
+    silent('pkill', '-f', f'hostapd.*hostapd-{phy}.conf')
+    time.sleep(0.5)
+
+    for iface in get_ifaces_on_phy(phy):
+        stop_pid(f'/run/piap-dnsmasq-{iface}.pid')
+        silent('nft', 'flush', 'table', 'inet', f'piap_{iface}')
+        silent('nft', 'delete', 'table', 'inet', f'piap_{iface}')
+        link = f'{dnsmasq_d}/piap-{iface}.conf'
+        if os.path.lexists(link):
+            os.remove(link)
+        if iface.startswith('piap'):
+            silent('ip', 'link', 'set', iface, 'down')
+            silent('iw', 'dev', iface, 'del')
+
+
+def main():
+    config_file = sys.argv[1]
+    with open(config_file) as f:
+        config = json.load(f)
+    os.unlink(config_file)
+
+    phy           = config['phy']
+    primary_iface = config['primaryIface']
+    profiles      = config['profiles']
+
+    config_dir   = '/etc/piap'
+    dnsmasq_d    = '/etc/dnsmasq.d'
+    hostapd_conf = f'{config_dir}/hostapd-{phy}.conf'
+    hostapd_pid  = f'/run/piap-hostapd-{phy}.pid'
+    nft_file     = f'{config_dir}/piap-{phy}.nft'
+
+    os.makedirs(config_dir, exist_ok=True)
+
+    # Always tear down existing state for this phy first
+    teardown_phy(phy, config_dir, dnsmasq_d)
+
+    if not profiles:
+        silent('sysctl', '-w', 'net.ipv4.ip_forward=0')
+        print(f'OK: {phy} stopped, no active profiles')
+        return
+
+    # Release wlan from wpa_supplicant
+    silent('systemctl', 'stop', 'wpa_supplicant')
+    silent('rfkill', 'unblock', 'wifi')
+    time.sleep(0.5)
+
+    # All BSSes on same radio share the primary profile's channel
+    channel = int(profiles[0].get('channel', 6))
+
+    # ── Set up interfaces ────────────────────────────────────────────────────
+    for i, profile in enumerate(profiles):
+        iface = profile['logicalIface']
+        if iface == primary_iface:
+            silent('ip', 'link', 'set', iface, 'down')
+            silent('iw', 'dev', iface, 'set', 'type', '__ap')
+            run('ip', 'link', 'set', iface, 'up')
+        else:
+            run('iw', 'phy', phy, 'interface', 'add', iface, 'type', '__ap')
+            run('ip', 'link', 'set', iface, 'up')
+
+        gw     = profile['gateway']
+        subnet = profile['subnet']
+        prefix = subnet.split('/')[-1]
+        silent('ip', 'addr', 'flush', 'dev', iface)
+        run('ip', 'addr', 'add', f'{gw}/{prefix}', 'dev', iface)
+
+    # ── hostapd multi-BSS config ─────────────────────────────────────────────
+    lines = []
+    for i, profile in enumerate(profiles):
+        iface = profile['logicalIface']
+        ssid  = profile['ssid']
+        pw    = profile['password']
+
+        if i == 0:
+            lines += [
+                f'interface={iface}',
+                'driver=nl80211',
+                f'ssid={ssid}',
+                'hw_mode=g',
+                f'channel={channel}',
+                'ieee80211n=1',
+                'wmm_enabled=1',
+                'macaddr_acl=0',
+                'auth_algs=1',
+                'ignore_broadcast_ssid=0',
+                'wpa=2',
+                f'wpa_passphrase={pw}',
+                'wpa_key_mgmt=WPA-PSK',
+                'rsn_pairwise=CCMP',
+            ]
+        else:
+            lines += [
+                '',
+                f'bss={iface}',
+                f'ssid={ssid}',
+                'macaddr_acl=0',
+                'auth_algs=1',
+                'ignore_broadcast_ssid=0',
+                'wpa=2',
+                f'wpa_passphrase={pw}',
+                'wpa_key_mgmt=WPA-PSK',
+                'rsn_pairwise=CCMP',
+            ]
+
+    with open(hostapd_conf, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+    # ── Per-interface dnsmasq configs and nftables rules ─────────────────────
+    nft_lines = []
+    needs_forward = False
+
+    for profile in profiles:
+        iface      = profile['logicalIface']
+        gw         = profile['gateway']
+        subnet     = profile['subnet']
+        net        = ipaddress.IPv4Network(subnet, strict=False)
+        netmask    = str(net.netmask)
+        dhcp_start = profile['dhcpStart']
+        dhcp_end   = profile['dhcpEnd']
+        captive    = profile.get('captivePortal', True)
+        internet   = profile.get('internetAccess', False)
+        lan_access = profile.get('lanAccess', False)
+
+        if internet or lan_access:
+            needs_forward = True
+
+        # dnsmasq
+        dm_lines = [
+            f'interface={iface}',
+            'bind-interfaces',
+            f'dhcp-range={dhcp_start},{dhcp_end},{netmask},12h',
+            f'dhcp-option=3,{gw}',
+            f'dhcp-option=6,{gw}',
+            'no-resolv',
+            'log-queries',
+            'log-dhcp',
+        ]
+        if captive:
+            dm_lines.append(f'address=/#/{gw}')
+        else:
+            dm_lines += ['server=8.8.8.8', 'server=8.8.4.4']
+
+        dm_conf = f'{config_dir}/dnsmasq-{iface}.conf'
+        with open(dm_conf, 'w') as f:
+            f.write('\n'.join(dm_lines) + '\n')
+
+        link = f'{dnsmasq_d}/piap-{iface}.conf'
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(dm_conf, link)
+
+        # nft — separate table per interface avoids rule conflicts
+        table = f'piap_{iface}'
+        nft_lines.append(f'table inet {table} {{')
+        nft_lines.append('  chain input {')
+        nft_lines.append('    type filter hook input priority 0; policy accept;')
+        nft_lines.append(f'    iifname "{iface}" udp dport 67 accept')
+        nft_lines.append(f'    iifname "{iface}" udp dport 53 accept')
+        nft_lines.append(f'    iifname "{iface}" tcp dport 53 accept')
+        nft_lines.append(f'    iifname "{iface}" tcp dport 80 accept')
+        nft_lines.append(f'    iifname "{iface}" tcp dport 3000 accept')
+        nft_lines.append(f'    iifname "{iface}" drop')
+        nft_lines.append('  }')
+        nft_lines.append('  chain forward {')
+        nft_lines.append('    type filter hook forward priority 0; policy drop;')
+        if internet:
+            nft_lines.append(f'    iifname "{iface}" oifname "eth0" ct state new accept')
+            nft_lines.append('    ct state established,related accept')
+        elif lan_access:
+            nft_lines.append(f'    iifname "{iface}" oifname "eth0" accept')
+            nft_lines.append('    ct state established,related accept')
+        nft_lines.append(f'    iifname "{iface}" drop')
+        nft_lines.append('  }')
+        if internet or lan_access:
+            nft_lines.append('  chain postrouting {')
+            nft_lines.append('    type nat hook postrouting priority 100;')
+            nft_lines.append(f'    iifname "{iface}" oifname "eth0" masquerade')
+            nft_lines.append('  }')
+        nft_lines.append('}')
+
+    with open(nft_file, 'w') as f:
+        f.write('\n'.join(nft_lines) + '\n')
+
+    run('nft', '-f', nft_file)
+
+    val = '1' if needs_forward else '0'
+    silent('sysctl', '-w', f'net.ipv4.ip_forward={val}')
+
+    # ── Start hostapd ────────────────────────────────────────────────────────
+    run('hostapd', '-B', '-P', hostapd_pid, hostapd_conf)
+    time.sleep(1)
+
+    # ── Start one dnsmasq per logical interface ───────────────────────────────
+    for profile in profiles:
+        iface    = profile['logicalIface']
+        dm_conf  = f'{config_dir}/dnsmasq-{iface}.conf'
+        pid_file = f'/run/piap-dnsmasq-{iface}.pid'
+        log_file = f'/var/log/piap-dnsmasq-{iface}.log'
+        run('dnsmasq',
+            f'--conf-file={dm_conf}',
+            f'--pid-file={pid_file}',
+            f'--log-facility={log_file}')
+
+    print(f'OK: {len(profiles)} network(s) running on {phy}')
+
+
+if __name__ == '__main__':
+    main()

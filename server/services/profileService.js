@@ -91,6 +91,7 @@ function create(data) {
     id: uuidv4(),
     ssid: data.ssid.trim(),
     password: data.password,
+    interface: typeof data.interface === 'string' && data.interface.trim() ? data.interface.trim() : 'wlan0',
     subnet: data.subnet && validateSubnet(data.subnet) ? data.subnet : autoNet.subnet,
     gateway: data.gateway && validateIp(data.gateway) ? data.gateway : autoNet.gateway,
     dhcpStart: data.dhcpStart && validateIp(data.dhcpStart) ? data.dhcpStart : autoNet.dhcpStart,
@@ -134,6 +135,9 @@ function update(id, data) {
   if (data.channel !== undefined && Number.isInteger(data.channel) && data.channel >= 1 && data.channel <= 13) {
     p.channel = data.channel;
   }
+  if (data.interface !== undefined && typeof data.interface === 'string' && data.interface.trim()) {
+    p.interface = data.interface.trim();
+  }
 
   writeProfiles(profiles);
   return p;
@@ -150,22 +154,15 @@ function remove(id) {
 
 function setActive(id, active) {
   const profiles = readProfiles();
-
-  if (active) {
-    // Only one active at a time
-    profiles.forEach(p => { if (p.id !== id) p.active = false; });
-  }
-
   const idx = profiles.findIndex(p => p.id === id);
   if (idx === -1) throw new Error('Profile not found');
   profiles[idx].active = active;
-
   writeProfiles(profiles);
   return profiles[idx];
 }
 
-function getActiveProfile() {
-  return readProfiles().find(p => p.active) || null;
+function getActiveProfiles() {
+  return readProfiles().filter(p => p.active);
 }
 
-module.exports = { getAll, getById, create, update, remove, setActive, getActiveProfile };
+module.exports = { getAll, getById, create, update, remove, setActive, getActiveProfiles };
