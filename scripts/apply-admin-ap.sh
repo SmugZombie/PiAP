@@ -132,15 +132,17 @@ sysctl -w net.ipv4.ip_forward=1 > /dev/null
 touch "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
 chmod 644 "${HOSTAPD_ADMIN_LOG}" "${DNSMASQ_ADMIN_LOG}"
 
-# ── Prepare interface for hostapd ─────────────────────────────────────────────
-# Bring UP first (some USB drivers need to be up to allow mode switch to AP)
+# ── Reset interface mode so hostapd gets a clean managed→AP transition ────────
+# Killing the old hostapd leaves the interface in AP mode in the kernel;
+# drivers reject a second SET_INTERFACE AP→AP call. Reset to managed first.
+ip link set "${IFACE}" down 2>/dev/null || true
+iw dev "${IFACE}" set type managed 2>/dev/null || true
+sleep 1
 ip link set "${IFACE}" up
 ip addr flush dev "${IFACE}"
-# Pre-set mode to AP; hostapd will do this too but some drivers prefer it early
-iw dev "${IFACE}" set type __ap 2>/dev/null || true
-sleep 1
+sleep 0.5
 
-# ── Start hostapd directly ─────────────────────────────────────────────────────
+# ── Start hostapd directly ────────────────────────────────────────────────────
 hostapd -B -P "${HOSTAPD_ADMIN_PID}" -f "${HOSTAPD_ADMIN_LOG}" "${HOSTAPD_ADMIN_CONF}" \
   || { echo "ERROR: hostapd failed, check ${HOSTAPD_ADMIN_LOG}" >&2; exit 1; }
 
