@@ -46,7 +46,17 @@ async function parseIwDev() {
 async function phySupportsAP(phy) {
   try {
     const { stdout } = await execFileAsync('iw', ['phy', phy, 'info']);
-    return stdout.includes('* AP');
+    // Only check within the "Supported interface modes:" section.
+    // stdout.includes('* AP') is a false positive — the TX frame types section
+    // also lists "* AP: 0x00 ..." with a colon, and that's not AP mode support.
+    const start = stdout.indexOf('Supported interface modes:');
+    if (start === -1) return false;
+    const section = stdout.slice(start + 'Supported interface modes:'.length);
+    for (const line of section.split('\n')) {
+      if (!line.match(/^\s+\*/)) break; // end of mode list (next section started)
+      if (/\*\s+AP\s*$/.test(line)) return true; // "* AP" alone, no colon after
+    }
+    return false;
   } catch {
     return false;
   }
@@ -85,4 +95,4 @@ async function getPhyForInterface(ifaceName) {
   return null;
 }
 
-module.exports = { listWifiInterfaces, getPhyForInterface };
+module.exports = { listWifiInterfaces, getPhyForInterface, phySupportsAP };

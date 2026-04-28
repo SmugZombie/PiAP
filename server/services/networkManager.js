@@ -84,6 +84,11 @@ async function startNetwork(profile) {
   const phy = await interfaceService.getPhyForInterface(iface);
   if (!phy) throw new Error(`Interface ${iface} not found or not available`);
 
+  const supportsAP = await interfaceService.phySupportsAP(phy);
+  if (!supportsAP) {
+    throw new Error(`Interface ${iface} (${phy}) does not support AP mode. Use a different adapter.`);
+  }
+
   const state = readState();
 
   // Already active on some phy?
