@@ -17,12 +17,12 @@ cd "${INSTALL_DIR}"
 log "Pulling latest changes…"
 git pull --ff-only
 
-# ── npm install (only if package.json changed) ────────────────────────────────
-if git diff HEAD@{1} HEAD --name-only 2>/dev/null | grep -q "package.json"; then
-  log "package.json changed — running npm install…"
+# ── npm install (if node_modules missing or package.json changed) ─────────────
+if [[ ! -d "${INSTALL_DIR}/node_modules" ]] || git diff HEAD@{1} HEAD --name-only 2>/dev/null | grep -q "package.json"; then
+  log "Running npm install…"
   npm install --omit=dev
 else
-  log "package.json unchanged — skipping npm install"
+  log "node_modules present and package.json unchanged — skipping npm install"
 fi
 
 # ── Update sudoers if changed ─────────────────────────────────────────────────
