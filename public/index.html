@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiAP — Wi-Fi Access Point Manager</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <style>
+    :root {
+      --primary: #0d6efd;
+      --success: #198754;
+      --danger:  #dc3545;
+      --warning: #ffc107;
+      --bg:      #f0f2f5;
+      --card:    #ffffff;
+      --border:  #dee2e6;
+      --text:    #212529;
+      --muted:   #6c757d;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+
+    /* ── Layout ── */
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: .85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.15rem; font-weight: 700; letter-spacing: .03em; }
+    header .subtitle { font-size: .8rem; opacity: .6; margin-left: auto; }
+
+    .nav-tabs {
+      background: #fff;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      gap: 0;
+      padding: 0 1.5rem;
+    }
+    .nav-tab {
+      padding: .65rem 1.2rem;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: .9rem;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color .15s;
+    }
+    .nav-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+    .nav-tab:hover:not(.active) { color: var(--text); }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+    .tab-panel { display: none; } .tab-panel.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .card-header h2 { font-size: 1rem; font-weight: 600; }
+
+    /* ── Status banner ── */
+    #status-bar {
+      padding: .6rem 1.2rem;
+      font-size: .85rem;
+      font-weight: 500;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    #status-bar.info    { display: block; background: #cfe2ff; color: #084298; }
+    #status-bar.success { display: block; background: #d1e7dd; color: #0a3622; }
+    #status-bar.error   { display: block; background: #f8d7da; color: #58151c; }
+
+    /* ── Active badge ── */
+    .badge {
+      display: inline-block;
+      padding: .2rem .55rem;
+      border-radius: 20px;
+      font-size: .75rem;
+      font-weight: 600;
+    }
+    .badge-active   { background: #d1e7dd; color: #0a3622; }
+    .badge-inactive { background: #e9ecef; color: #495057; }
+    .badge-warning  { background: #fff3cd; color: #664d03; }
+
+    /* ── Profile list ── */
+    .profile-list { display: flex; flex-direction: column; gap: .75rem; }
+    .profile-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: .5rem 1rem;
+      align-items: center;
+      background: #fff;
+      transition: box-shadow .15s;
+    }
+    .profile-item.is-active {
+      border-color: var(--success);
+      box-shadow: 0 0 0 2px rgba(25,135,84,.15);
+    }
+    .profile-name { font-weight: 600; font-size: .95rem; }
+    .profile-meta { font-size: .8rem; color: var(--muted); margin-top: .15rem; }
+    .profile-actions { display: flex; gap: .5rem; flex-wrap: wrap; justify-content: flex-end; }
+
+    /* ── Buttons ── */
+    .btn {
+      padding: .38rem .9rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: .83rem;
+      font-weight: 500;
+      transition: opacity .15s, transform .1s;
+    }
+    .btn:hover { opacity: .87; }
+    .btn:active { transform: scale(.97); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger  { background: var(--danger);  color: #fff; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-sm { padding: .28rem .65rem; font-size: .78rem; }
+    .btn-warning { background: #e67e22; color: #fff; }
+
+    /* ── Form ── */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem 1rem; }
+    @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+    .form-group { display: flex; flex-direction: column; gap: .3rem; }
+    .form-group.full-width { grid-column: 1 / -1; }
+    label { font-size: .83rem; font-weight: 500; color: var(--muted); }
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: .42rem .7rem;
+      font-size: .88rem;
+      width: 100%;
+      outline: none;
+      transition: border-color .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+    textarea { resize: vertical; min-height: 60px; }
+    .form-check { display: flex; align-items: center; gap: .5rem; font-size: .88rem; }
+    .form-check input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+
+    /* ── Clients table ── */
+    table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+    th { text-align: left; padding: .5rem .75rem; background: #f8f9fa; border-bottom: 2px solid var(--border); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    td { padding: .55rem .75rem; border-bottom: 1px solid #f0f0f0; }
+    tr:last-child td { border-bottom: none; }
+    .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--muted); font-size: .9rem; }
+
+    /* ── Logs ── */
+    .log-box {
+      background: #1a1a2e;
+      color: #a8d8a8;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: .76rem;
+      padding: 1rem;
+      border-radius: 8px;
+      max-height: 340px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.5;
+    }
+    .log-section-title { font-size: .8rem; font-weight: 600; color: var(--muted); margin: .75rem 0 .3rem; text-transform: uppercase; letter-spacing: .05em; }
+
+    /* ── Admin AP card ── */
+    .admin-ap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem 1rem; }
+    @media (max-width: 600px) { .admin-ap-grid { grid-template-columns: 1fr; } }
+    .stat-row { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .stat { display: flex; flex-direction: column; }
+    .stat-label { font-size: .75rem; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+    .stat-value { font-size: 1rem; font-weight: 600; }
+
+    /* ── Spinner ── */
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 4px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.4rem">📡</span>
+  <h1>PiAP — Access Point Manager</h1>
+  <span class="subtitle" id="header-active">No active network</span>
+</header>
+
+<nav class="nav-tabs">
+  <button class="nav-tab active" data-tab="tab-profiles">Networks</button>
+  <button class="nav-tab" data-tab="tab-clients">Clients</button>
+  <button class="nav-tab" data-tab="tab-logs">Logs</button>
+  <button class="nav-tab" data-tab="tab-admin">Admin AP</button>
+</nav>
+
+<div class="container">
+  <div id="status-bar"></div>
+
+  <!-- ── Networks tab ──────────────────────────────────────────────────────── -->
+  <div id="tab-profiles" class="tab-panel active">
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Saved Profiles</h2>
+        <button class="btn btn-primary btn-sm" id="btn-show-create">+ New Profile</button>
+      </div>
+      <div id="profile-list" class="profile-list">
+        <div class="empty-state">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Create form -->
+    <div class="card" id="create-form-card" style="display:none">
+      <div class="card-header">
+        <h2 id="form-title">Create Profile</h2>
+        <button class="btn btn-outline btn-sm" id="btn-cancel-create">Cancel</button>
+      </div>
+      <form id="profile-form" autocomplete="off">
+        <input type="hidden" id="edit-id">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="f-ssid">SSID *</label>
+            <input type="text" id="f-ssid" placeholder="Deadend-Lab-01" maxlength="32" required>
+          </div>
+          <div class="form-group">
+            <label for="f-password">WPA2 Password * (8–63 chars)</label>
+            <input type="password" id="f-password" placeholder="••••••••" minlength="8" maxlength="63" required>
+          </div>
+          <div class="form-group">
+            <label for="f-channel">Channel (1–13)</label>
+            <input type="number" id="f-channel" min="1" max="13" value="6">
+          </div>
+          <div class="form-group">
+            <label>Subnet (auto-assigned if blank)</label>
+            <input type="text" id="f-subnet" placeholder="10.55.0.0/24">
+          </div>
+          <div class="form-group">
+            <label>Gateway IP</label>
+            <input type="text" id="f-gateway" placeholder="10.55.0.1">
+          </div>
+          <div class="form-group">
+            <label>DHCP Start</label>
+            <input type="text" id="f-dhcpStart" placeholder="10.55.0.50">
+          </div>
+          <div class="form-group">
+            <label>DHCP End</label>
+            <input type="text" id="f-dhcpEnd" placeholder="10.55.0.200">
+          </div>
+
+          <div class="form-group full-width" style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:.25rem">
+            <label class="form-check">
+              <input type="checkbox" id="f-captivePortal" checked>
+              Captive portal
+            </label>
+            <label class="form-check">
+              <input type="checkbox" id="f-internetAccess">
+              Allow internet access
+            </label>
+            <label class="form-check">
+              <input type="checkbox" id="f-lanAccess">
+              Allow LAN access
+            </label>
+          </div>
+
+          <div class="form-group full-width">
+            <label for="f-captiveMessage">Captive portal message</label>
+            <textarea id="f-captiveMessage" maxlength="500" rows="2" placeholder="This is a test/lab network. No internet access."></textarea>
+          </div>
+        </div>
+
+        <div style="margin-top:1rem; display:flex; gap:.75rem">
+          <button type="submit" class="btn btn-primary" id="btn-save">Save Profile</button>
+          <button type="button" class="btn btn-outline" id="btn-cancel-create2">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Clients tab ───────────────────────────────────────────────────────── -->
+  <div id="tab-clients" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>Connected Clients</h2>
+        <button class="btn btn-outline btn-sm" id="btn-refresh-clients">Refresh</button>
+      </div>
+      <div id="clients-content">
+        <div class="empty-state">Click refresh to load clients.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Logs tab ──────────────────────────────────────────────────────────── -->
+  <div id="tab-logs" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>System Logs</h2>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <select id="log-lines" style="width:auto;padding:.3rem .5rem">
+            <option value="50">50 lines</option>
+            <option value="100" selected>100 lines</option>
+            <option value="200">200 lines</option>
+          </select>
+          <button class="btn btn-outline btn-sm" id="btn-refresh-logs">Refresh</button>
+        </div>
+      </div>
+      <div id="logs-content">
+        <div class="empty-state">Click refresh to load logs.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Admin AP tab ───────────────────────────────────────────────────────── -->
+  <div id="tab-admin" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        <h2>Admin Management AP <span style="font-size:.75rem;color:var(--muted)">(wlan1)</span></h2>
+        <div id="admin-ap-status-badge"></div>
+      </div>
+      <p style="font-size:.85rem;color:var(--muted);margin-bottom:1rem">
+        The admin AP runs on <strong>wlan1</strong> and gives you wireless access to this dashboard.
+        It is isolated from the guest network on wlan0 and always forwards DNS upstream.
+        Password is write-only — submit only when changing.
+      </p>
+
+      <div class="stat-row" id="admin-ap-stats"></div>
+
+      <form id="admin-ap-form" autocomplete="off">
+        <div class="admin-ap-grid">
+          <div class="form-group">
+            <label for="aap-ssid">SSID</label>
+            <input type="text" id="aap-ssid" maxlength="32">
+          </div>
+          <div class="form-group">
+            <label for="aap-password">Password (leave blank to keep current)</label>
+            <input type="password" id="aap-password" placeholder="•••••••• (unchanged)" minlength="8" maxlength="63" autocomplete="new-password">
+          </div>
+          <div class="form-group">
+            <label for="aap-channel">Channel (1–13)</label>
+            <input type="number" id="aap-channel" min="1" max="13">
+          </div>
+        </div>
+        <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+          <button type="button" class="btn btn-success" id="btn-admin-start">Start Admin AP</button>
+          <button type="button" class="btn btn-danger"  id="btn-admin-stop">Stop Admin AP</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+'use strict';
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+let _statusTimer = null;
+function showStatus(msg, type = 'info', ms = 4000) {
+  const el = $('status-bar');
+  el.className = type;
+  el.textContent = msg;
+  clearTimeout(_statusTimer);
+  if (ms > 0) _statusTimer = setTimeout(() => { el.className = ''; }, ms);
+}
+
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  const body = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(body?.error || body || `HTTP ${res.status}`);
+  return body;
+}
+
+function setLoading(btn, loading) {
+  if (loading) {
+    btn.dataset.origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span> Working…';
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = btn.dataset.origText || btn.innerHTML;
+    btn.disabled = false;
+  }
+}
+
+// ── Tab routing ──────────────────────────────────────────────────────────────
+
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    $(tab.dataset.tab).classList.add('active');
+
+    if (tab.dataset.tab === 'tab-clients') loadClients();
+    if (tab.dataset.tab === 'tab-admin')   loadAdminAp();
+  });
+});
+
+// ── Profiles ─────────────────────────────────────────────────────────────────
+
+async function loadProfiles() {
+  try {
+    const profiles = await apiFetch('/api/profiles');
+    renderProfiles(profiles);
+    const active = profiles.find(p => p.active);
+    $('header-active').textContent = active ? `Active: ${active.ssid}` : 'No active network';
+  } catch (e) {
+    showStatus('Error loading profiles: ' + e.message, 'error', 0);
+  }
+}
+
+function renderProfiles(profiles) {
+  const el = $('profile-list');
+  if (!profiles.length) {
+    el.innerHTML = '<div class="empty-state">No profiles yet. Create one above.</div>';
+    return;
+  }
+  el.innerHTML = profiles.map(p => `
+    <div class="profile-item ${p.active ? 'is-active' : ''}" data-id="${esc(p.id)}">
+      <div>
+        <div class="profile-name">${esc(p.ssid)}</div>
+        <div class="profile-meta">
+          ${esc(p.subnet)} &nbsp;·&nbsp; GW ${esc(p.gateway)} &nbsp;·&nbsp;
+          ch${esc(p.channel)}
+          ${p.captivePortal ? '&nbsp;·&nbsp; captive portal' : ''}
+          ${p.internetAccess ? '&nbsp;·&nbsp; <span style="color:var(--success)">internet ✓</span>' : ''}
+          ${p.lanAccess ? '&nbsp;·&nbsp; <span style="color:var(--warning)">LAN ✓</span>' : ''}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;justify-content:flex-end">
+        <span class="badge ${p.active ? 'badge-active' : 'badge-inactive'}">${p.active ? 'ACTIVE' : 'idle'}</span>
+        <div class="profile-actions">
+          ${p.active
+            ? `<button class="btn btn-danger btn-sm" onclick="stopProfile('${p.id}', this)">Stop</button>`
+            : `<button class="btn btn-success btn-sm" onclick="startProfile('${p.id}', this)">Start</button>`
+          }
+          <button class="btn btn-outline btn-sm" onclick="editProfile('${p.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}', this)" ${p.active ? 'disabled' : ''}>Delete</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.startProfile = async (id, btn) => {
+  if (!confirm('Start this network? Any currently active network will be stopped first.')) return;
+  setLoading(btn, true);
+  try {
+    await apiFetch(`/api/profiles/${id}/start`, { method: 'POST' });
+    showStatus('Network started successfully.', 'success');
+    await loadProfiles();
+  } catch (e) {
+    showStatus('Failed to start: ' + e.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+};
+
+window.stopProfile = async (id, btn) => {
+  if (!confirm('Stop this network?')) return;
+  setLoading(btn, true);
+  try {
+    await apiFetch(`/api/profiles/${id}/stop`, { method: 'POST' });
+    showStatus('Network stopped.', 'success');
+    await loadProfiles();
+  } catch (e) {
+    showStatus('Failed to stop: ' + e.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+};
+
+window.deleteProfile = async (id, btn) => {
+  if (!confirm('Delete this profile? This cannot be undone.')) return;
+  setLoading(btn, true);
+  try {
+    await apiFetch(`/api/profiles/${id}`, { method: 'DELETE' });
+    showStatus('Profile deleted.', 'success');
+    await loadProfiles();
+  } catch (e) {
+    showStatus('Failed to delete: ' + e.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+};
+
+// ── Profile form ─────────────────────────────────────────────────────────────
+
+function showCreateForm() {
+  $('create-form-card').style.display = 'block';
+  $('form-title').textContent = 'Create Profile';
+  $('profile-form').reset();
+  $('edit-id').value = '';
+  $('f-captivePortal').checked = true;
+  $('create-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function hideCreateForm() {
+  $('create-form-card').style.display = 'none';
+  $('profile-form').reset();
+  $('edit-id').value = '';
+}
+
+$('btn-show-create').addEventListener('click', showCreateForm);
+$('btn-cancel-create').addEventListener('click', hideCreateForm);
+$('btn-cancel-create2').addEventListener('click', hideCreateForm);
+
+window.editProfile = async id => {
+  try {
+    const p = await apiFetch(`/api/profiles/${id}`);
+    $('form-title').textContent = 'Edit Profile';
+    $('edit-id').value = p.id;
+    $('f-ssid').value = p.ssid;
+    $('f-password').value = '';
+    $('f-password').placeholder = '(unchanged — enter to change)';
+    $('f-password').required = false;
+    $('f-channel').value = p.channel || 6;
+    $('f-subnet').value = p.subnet || '';
+    $('f-gateway').value = p.gateway || '';
+    $('f-dhcpStart').value = p.dhcpStart || '';
+    $('f-dhcpEnd').value = p.dhcpEnd || '';
+    $('f-captivePortal').checked = !!p.captivePortal;
+    $('f-internetAccess').checked = !!p.internetAccess;
+    $('f-lanAccess').checked = !!p.lanAccess;
+    $('f-captiveMessage').value = p.captiveMessage || '';
+    $('create-form-card').style.display = 'block';
+    $('create-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    showStatus('Failed to load profile: ' + e.message, 'error');
+  }
+};
+
+$('profile-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const editId = $('edit-id').value;
+  const isEdit = !!editId;
+
+  const data = {
+    ssid:           $('f-ssid').value.trim(),
+    channel:        parseInt($('f-channel').value, 10) || 6,
+    subnet:         $('f-subnet').value.trim() || undefined,
+    gateway:        $('f-gateway').value.trim() || undefined,
+    dhcpStart:      $('f-dhcpStart').value.trim() || undefined,
+    dhcpEnd:        $('f-dhcpEnd').value.trim() || undefined,
+    captivePortal:  $('f-captivePortal').checked,
+    internetAccess: $('f-internetAccess').checked,
+    lanAccess:      $('f-lanAccess').checked,
+    captiveMessage: $('f-captiveMessage').value.trim(),
+  };
+
+  const pw = $('f-password').value;
+  if (pw) data.password = pw;
+  else if (!isEdit) {
+    showStatus('Password is required for new profiles.', 'error');
+    return;
+  }
+
+  const btn = $('btn-save');
+  setLoading(btn, true);
+  try {
+    if (isEdit) {
+      await apiFetch(`/api/profiles/${editId}`, { method: 'PATCH', body: JSON.stringify(data) });
+      showStatus('Profile updated.', 'success');
+    } else {
+      await apiFetch('/api/profiles', { method: 'POST', body: JSON.stringify(data) });
+      showStatus('Profile created.', 'success');
+    }
+    hideCreateForm();
+    await loadProfiles();
+  } catch (err) {
+    showStatus('Error: ' + err.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+// ── Clients ──────────────────────────────────────────────────────────────────
+
+async function loadClients() {
+  const el = $('clients-content');
+  el.innerHTML = '<div class="empty-state">Loading…</div>';
+  try {
+    const data = await apiFetch('/api/clients');
+    let html = '';
+
+    html += `<div class="stat-row">
+      <div class="stat"><span class="stat-label">Active Network</span><span class="stat-value">${data.activeProfile ? esc(data.activeProfile.ssid) : '—'}</span></div>
+      <div class="stat"><span class="stat-label">hostapd</span><span class="stat-value">${data.systemStatus.hostapdActive ? '🟢 running' : '🔴 stopped'}</span></div>
+      <div class="stat"><span class="stat-label">dnsmasq</span><span class="stat-value">${data.systemStatus.dnsmasqActive ? '🟢 running' : '🔴 stopped'}</span></div>
+      <div class="stat"><span class="stat-label">Clients</span><span class="stat-value">${data.count}</span></div>
+    </div>`;
+
+    if (!data.clients.length) {
+      html += '<div class="empty-state">No active DHCP leases.</div>';
+    } else {
+      html += `<table>
+        <thead><tr><th>MAC</th><th>IP</th><th>Hostname</th><th>Expires</th></tr></thead>
+        <tbody>${data.clients.map(c => `
+          <tr>
+            <td><code>${esc(c.mac)}</code></td>
+            <td>${esc(c.ip)}</td>
+            <td>${esc(c.hostname)}</td>
+            <td>${c.expiresAt ? new Date(c.expiresAt).toLocaleTimeString() : 'static'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state" style="color:var(--danger)">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+$('btn-refresh-clients').addEventListener('click', loadClients);
+
+// ── Logs ─────────────────────────────────────────────────────────────────────
+
+async function loadLogs() {
+  const el = $('logs-content');
+  el.innerHTML = '<div class="empty-state">Loading…</div>';
+  try {
+    const n = $('log-lines').value;
+    const logs = await apiFetch(`/api/logs?lines=${n}`);
+    el.innerHTML = `
+      <div class="log-section-title">hostapd</div>
+      <div class="log-box">${esc(logs.hostapd.join('\n')) || '(no entries)'}</div>
+      <div class="log-section-title">dnsmasq</div>
+      <div class="log-box">${esc(logs.dnsmasq.join('\n')) || '(no entries)'}</div>
+      <div class="log-section-title">piap (app)</div>
+      <div class="log-box">${esc(logs.piap.join('\n')) || '(no entries)'}</div>
+      <p style="font-size:.76rem;color:var(--muted);margin-top:.5rem">Fetched at ${new Date(logs.fetchedAt).toLocaleTimeString()}</p>
+    `;
+    // Auto-scroll log boxes to bottom
+    document.querySelectorAll('.log-box').forEach(b => { b.scrollTop = b.scrollHeight; });
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state" style="color:var(--danger)">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+$('btn-refresh-logs').addEventListener('click', loadLogs);
+
+// ── Admin AP ─────────────────────────────────────────────────────────────────
+
+async function loadAdminAp() {
+  try {
+    const ap = await apiFetch('/api/admin-ap');
+    $('aap-ssid').value = ap.ssid || '';
+    $('aap-channel').value = ap.channel || 1;
+
+    $('admin-ap-status-badge').innerHTML = `<span class="badge ${ap.running ? 'badge-active' : 'badge-inactive'}">${ap.running ? 'RUNNING' : 'STOPPED'}</span>`;
+
+    $('admin-ap-stats').innerHTML = `
+      <div class="stat"><span class="stat-label">Interface</span><span class="stat-value">${esc(ap.interface)}</span></div>
+      <div class="stat"><span class="stat-label">Gateway</span><span class="stat-value">${esc(ap.gateway)}</span></div>
+      <div class="stat"><span class="stat-label">DHCP Range</span><span class="stat-value">${esc(ap.dhcpStart)} – ${esc(ap.dhcpEnd)}</span></div>
+    `;
+  } catch (e) {
+    showStatus('Error loading admin AP settings: ' + e.message, 'error');
+  }
+}
+
+$('admin-ap-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const data = {};
+  const ssid = $('aap-ssid').value.trim();
+  const pw   = $('aap-password').value;
+  const ch   = parseInt($('aap-channel').value, 10);
+
+  if (ssid) data.ssid = ssid;
+  if (pw)   data.password = pw;
+  if (ch)   data.channel = ch;
+
+  try {
+    await apiFetch('/api/admin-ap', { method: 'PATCH', body: JSON.stringify(data) });
+    showStatus('Admin AP settings saved. Restart the AP to apply changes.', 'success');
+    $('aap-password').value = '';
+    await loadAdminAp();
+  } catch (e) {
+    showStatus('Error: ' + e.message, 'error', 0);
+  }
+});
+
+$('btn-admin-start').addEventListener('click', async () => {
+  const btn = $('btn-admin-start');
+  setLoading(btn, true);
+  try {
+    await apiFetch('/api/admin-ap/start', { method: 'POST' });
+    showStatus('Admin AP started.', 'success');
+    await loadAdminAp();
+  } catch (e) {
+    showStatus('Failed to start admin AP: ' + e.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+$('btn-admin-stop').addEventListener('click', async () => {
+  if (!confirm('Stop the admin AP? You may lose access to this UI over Wi-Fi.')) return;
+  const btn = $('btn-admin-stop');
+  setLoading(btn, true);
+  try {
+    await apiFetch('/api/admin-ap/stop', { method: 'POST' });
+    showStatus('Admin AP stopped.', 'success');
+    await loadAdminAp();
+  } catch (e) {
+    showStatus('Failed to stop admin AP: ' + e.message, 'error', 0);
+  } finally {
+    setLoading(btn, false);
+  }
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+loadProfiles();
+</script>
+</body>
+</html>

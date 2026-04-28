@@ -1,0 +1,20 @@
+[Unit]
+Description=PiAP Wi-Fi Access Point Manager
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=piap
+WorkingDirectory=/opt/piap
+ExecStart=/usr/bin/node /opt/piap/server/app.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=piap
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
