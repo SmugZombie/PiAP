@@ -15,8 +15,7 @@ cd "${INSTALL_DIR}"
 
 # ── Pull latest ───────────────────────────────────────────────────────────────
 log "Pulling latest changes…"
-# Run git as the piap user so ownership stays correct
-sudo -u piap git pull --ff-only
+git pull --ff-only
 
 # ── npm install (only if package.json changed) ────────────────────────────────
 if git diff HEAD@{1} HEAD --name-only 2>/dev/null | grep -q "package.json"; then
