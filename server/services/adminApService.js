@@ -1,10 +1,5 @@
 'use strict';
 
-// Manages the dedicated admin Wi-Fi AP on wlan1.
-// The admin AP is always-on, password-protected, and provides access
-// to the PiAP web UI. It is completely separate from the guest/lab
-// network on wlan0.
-
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
@@ -13,12 +8,10 @@ const { execFile } = require('child_process');
 const util = require('util');
 
 const execFileAsync = util.promisify(execFile);
+const interfaceService = require('./interfaceService');
 
 const ADMIN_CONFIG_DIR = '/etc/piap';
-const HOSTAPD_ADMIN_CONF = path.join(ADMIN_CONFIG_DIR, 'hostapd-admin.conf');
-const DNSMASQ_ADMIN_CONF = path.join(ADMIN_CONFIG_DIR, 'dnsmasq-admin.conf');
 const SETTINGS_FILE = path.join(__dirname, '..', '..', 'data', 'admin-ap.json');
-
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', 'scripts');
 const ADMIN_APPLY_SCRIPT = path.join(SCRIPTS_DIR, 'apply-admin-ap.sh');
 const ADMIN_STOP_SCRIPT = path.join(SCRIPTS_DIR, 'stop-admin-ap.sh');
@@ -60,7 +53,6 @@ function validatePassword(pw) {
 function getSettings() {
   const s = readSettings();
   const safe = { ...s };
-  // Never expose password through the API
   delete safe.password;
   return safe;
 }
@@ -68,6 +60,14 @@ function getSettings() {
 async function applySettings(data) {
   const current = readSettings();
 
+  if (data.interface !== undefined) {
+    const iface = String(data.interface).trim();
+    const phy = await interfaceService.getPhyForInterface(iface);
+    if (!phy) throw new Error(`Interface ${iface} not found`);
+    const supportsAP = await interfaceService.phySupportsAP(phy);
+    if (!supportsAP) throw new Error(`Interface ${iface} does not support AP mode`);
+    current.interface = iface;
+  }
   if (data.ssid !== undefined) {
     if (!validateSsid(data.ssid)) throw new Error('Invalid SSID');
     current.ssid = data.ssid.trim();
@@ -94,16 +94,19 @@ function writeTempJson(data) {
 
 async function start() {
   const settings = readSettings();
-  const tmpFile = writeTempJson(settings);
 
+  const phy = await interfaceService.getPhyForInterface(settings.interface);
+  if (!phy) throw new Error(`Interface ${settings.interface} not found`);
+  const supportsAP = await interfaceService.phySupportsAP(phy);
+  if (!supportsAP) throw new Error(`Interface ${settings.interface} does not support AP mode. Change the interface in Admin AP settings.`);
+
+  const tmpFile = writeTempJson(settings);
   try {
     const { stdout, stderr } = await execFileAsync('sudo', [ADMIN_APPLY_SCRIPT, tmpFile], {
       timeout: 30000,
     });
-
     settings.enabled = true;
     writeSettings(settings);
-
     return { stdout, stderr };
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
@@ -111,21 +114,22 @@ async function start() {
 }
 
 async function stop() {
-  const { stdout, stderr } = await execFileAsync('sudo', [ADMIN_STOP_SCRIPT], {
+  const settings = readSettings();
+  const iface = settings.interface || 'wlan1';
+  const { stdout, stderr } = await execFileAsync('sudo', [ADMIN_STOP_SCRIPT, iface], {
     timeout: 20000,
   });
-
-  const settings = readSettings();
   settings.enabled = false;
   writeSettings(settings);
-
   return { stdout, stderr };
 }
 
-async function isRunning() {
+function isRunning() {
   try {
-    const { stdout } = await execFileAsync('systemctl', ['is-active', 'hostapd-admin']);
-    return stdout.trim() === 'active';
+    const pid = parseInt(fs.readFileSync('/run/piap-hostapd-admin.pid', 'utf8').trim(), 10);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
   } catch {
     return false;
   }

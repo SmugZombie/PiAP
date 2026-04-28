@@ -8,7 +8,7 @@ const adminApService = require('../services/adminApService');
 router.get('/', async (req, res) => {
   try {
     const settings = adminApService.getSettings();
-    const running = await adminApService.isRunning();
+    const running = adminApService.isRunning();
     res.json({ ...settings, running });
   } catch (err) {
     res.status(500).json({ error: err.message });

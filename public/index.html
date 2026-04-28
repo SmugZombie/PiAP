@@ -239,11 +239,11 @@
   <div id="tab-admin" class="tab-panel">
     <div class="card">
       <div class="card-header">
-        <h2>Admin Management AP <span style="font-size:.75rem;color:var(--muted)">(wlan1)</span></h2>
+        <h2>Admin Management AP <span id="admin-ap-iface-label" style="font-size:.75rem;color:var(--muted)"></span></h2>
         <div id="admin-ap-status-badge"></div>
       </div>
       <p style="font-size:.85rem;color:var(--muted);margin-bottom:1rem">
-        The admin AP runs on <strong>wlan1</strong> and gives you wireless access to this dashboard.
+        The admin AP gives you wireless access to this dashboard.
         It is isolated from guest networks and always forwards DNS upstream.
         Password is write-only.
       </p>
@@ -261,6 +261,10 @@
           <div class="form-group">
             <label for="aap-channel">Channel (1–13)</label>
             <input type="number" id="aap-channel" min="1" max="13">
+          </div>
+          <div class="form-group">
+            <label for="aap-interface">Interface</label>
+            <select id="aap-interface"></select>
           </div>
         </div>
         <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
@@ -352,17 +356,24 @@ async function loadAdapters() {
 }
 
 function populateIfaceDropdown() {
-  const sel = $('f-interface');
-  const current = sel.value;
-  sel.innerHTML = availableInterfaces
-    .filter(i => i.supportsAP)
+  const apIfaces = availableInterfaces.filter(i => i.supportsAP);
+  const opts = apIfaces
     .map(i => `<option value="${esc(i.name)}">${esc(i.name)} (${esc(i.phy)}${i.inUse ? ' · in use' : ''})</option>`)
-    .join('');
-  if (!sel.innerHTML) {
-    sel.innerHTML = '<option value="wlan0">wlan0 (default)</option>';
-  }
-  if (current) sel.value = current;
+    .join('') || '<option value="wlan0">wlan0 (default)</option>';
+
+  const sel = $('f-interface');
+  const cur = sel.value;
+  sel.innerHTML = opts;
+  if (cur) sel.value = cur;
   updateIfaceNote();
+
+  // Also populate the admin AP interface dropdown
+  const aapSel = $('aap-interface');
+  const aapCur = aapSel.value;
+  aapSel.innerHTML = apIfaces
+    .map(i => `<option value="${esc(i.name)}">${esc(i.name)} (${esc(i.phy)})</option>`)
+    .join('') || '<option value="wlan0">wlan0 (default)</option>';
+  if (aapCur) aapSel.value = aapCur;
 }
 
 function updateIfaceNote() {
@@ -629,6 +640,8 @@ async function loadAdminAp() {
     const ap = await apiFetch('/api/admin-ap');
     $('aap-ssid').value    = ap.ssid || '';
     $('aap-channel').value = ap.channel || 1;
+    if (ap.interface) $('aap-interface').value = ap.interface;
+    $('admin-ap-iface-label').textContent = ap.interface ? `(${ap.interface})` : '';
     $('admin-ap-status-badge').innerHTML = `<span class="badge ${ap.running ? 'badge-active' : 'badge-inactive'}">${ap.running ? 'RUNNING' : 'STOPPED'}</span>`;
     $('admin-ap-stats').innerHTML = `
       <div class="stat"><span class="stat-label">Interface</span><span class="stat-value">${esc(ap.interface)}</span></div>
@@ -641,12 +654,14 @@ async function loadAdminAp() {
 $('admin-ap-form').addEventListener('submit', async e => {
   e.preventDefault();
   const data = {};
-  const ssid = $('aap-ssid').value.trim();
-  const pw   = $('aap-password').value;
-  const ch   = parseInt($('aap-channel').value, 10);
-  if (ssid) data.ssid = ssid;
-  if (pw)   data.password = pw;
-  if (ch)   data.channel = ch;
+  const ssid  = $('aap-ssid').value.trim();
+  const pw    = $('aap-password').value;
+  const ch    = parseInt($('aap-channel').value, 10);
+  const iface = $('aap-interface').value;
+  if (ssid)  data.ssid = ssid;
+  if (pw)    data.password = pw;
+  if (ch)    data.channel = ch;
+  if (iface) data.interface = iface;
   try {
     await apiFetch('/api/admin-ap', { method: 'PATCH', body: JSON.stringify(data) });
     showStatus('Saved. Restart the admin AP to apply.', 'success');

@@ -4,8 +4,4 @@
 
 piap ALL=(root) NOPASSWD: /opt/piap/scripts/apply-phy.sh *
 piap ALL=(root) NOPASSWD: /opt/piap/scripts/apply-admin-ap.sh *
-piap ALL=(root) NOPASSWD: /opt/piap/scripts/stop-admin-ap.sh
-piap ALL=(root) NOPASSWD: /usr/bin/systemctl start hostapd-admin
-piap ALL=(root) NOPASSWD: /usr/bin/systemctl stop hostapd-admin
-piap ALL=(root) NOPASSWD: /usr/bin/systemctl reload-or-restart dnsmasq
-piap ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+piap ALL=(root) NOPASSWD: /opt/piap/scripts/stop-admin-ap.sh *
