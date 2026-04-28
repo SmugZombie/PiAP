@@ -262,6 +262,7 @@ def main():
         # dnsmasq config
         dm_lines = [
             f'interface={iface}',
+            'except-interface=lo',
             'bind-interfaces',
             f'dhcp-range={dhcp_start},{dhcp_end},{netmask},12h',
             f'dhcp-option=3,{gw}',

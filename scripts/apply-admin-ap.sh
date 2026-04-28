@@ -82,6 +82,7 @@ HEOF
 # ── dnsmasq config ────────────────────────────────────────────────────────────
 {
   printf "interface=%s\n"             "${IFACE}"
+  printf "except-interface=lo\n"
   printf "bind-interfaces\n"
   printf "dhcp-range=%s,%s,255.255.255.0,12h\n" "${DHCP_START}" "${DHCP_END}"
   printf "dhcp-option=3,%s\n"        "${GATEWAY}"
