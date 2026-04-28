@@ -125,14 +125,21 @@ async function stop() {
 }
 
 function isRunning() {
-  try {
-    const pid = parseInt(fs.readFileSync('/run/piap-hostapd-admin.pid', 'utf8').trim(), 10);
-    if (!pid) return false;
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+  // Check both the new direct-process PID file and the old systemd PID file location
+  for (const pidFile of ['/run/piap-hostapd-admin.pid', '/run/hostapd-admin.pid']) {
+    try {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+      if (pid) { process.kill(pid, 0); return true; }
+    } catch {}
   }
+  // Fallback: systemd service may still be running from a pre-update install
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('systemctl', ['is-active', 'hostapd-admin'],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
+    if (out.toString().trim() === 'active') return true;
+  } catch {}
+  return false;
 }
 
 module.exports = { getSettings, applySettings, start, stop, isRunning };
