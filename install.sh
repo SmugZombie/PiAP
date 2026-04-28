@@ -4,10 +4,10 @@
 set -euo pipefail
 
 PIAP_USER="piap"
-INSTALL_DIR="/opt/piap"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${SCRIPT_DIR}"
 CONFIG_DIR="/etc/piap"
 DATA_DIR="${INSTALL_DIR}/data"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[piap]${NC} $*"; }
@@ -118,7 +118,7 @@ chmod 600 "${DATA_DIR}"/*.json
 
 # ── Sudoers ───────────────────────────────────────────────────────────────────
 log "Installing sudoers rules…"
-cp "${INSTALL_DIR}/scripts/sudoers-piap" /etc/sudoers.d/piap
+sed "s|/opt/piap|${INSTALL_DIR}|g" "${INSTALL_DIR}/scripts/sudoers-piap" > /etc/sudoers.d/piap
 chmod 440 /etc/sudoers.d/piap
 visudo -c -f /etc/sudoers.d/piap || die "sudoers file is invalid!"
 
@@ -127,9 +127,9 @@ log "Configuring nftables…"
 systemctl enable nftables
 systemctl start nftables
 
-# ── systemd service ───────────────────────────────────────────────────────────
+# ── systemd service (stamp real install path into the unit file) ──────────────
 log "Installing systemd service…"
-cp "${INSTALL_DIR}/piap.service" /etc/systemd/system/piap.service
+sed "s|/opt/piap|${INSTALL_DIR}|g" "${INSTALL_DIR}/piap.service" > /etc/systemd/system/piap.service
 systemctl daemon-reload
 systemctl enable piap
 systemctl restart piap
